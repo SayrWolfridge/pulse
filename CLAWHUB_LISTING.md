@@ -19,6 +19,7 @@ Pulse is a persistent daemon that gives AI agents self-directed initiative. Inst
 - **Drive engine** with 6 built-in motivation categories (goals, curiosity, emotions, learning, social, system)
 - **Pressure accumulation** — unfulfilled drives get louder over time
 - **Self-wake triggers** — agent decides when to think, not you
+- **CORTEX_EXT** — learning gap detector that surfaces silent recurring errors automatically (escalates patterns 3+ times)
 
 ### 📡 Passive Monitoring
 - **Filesystem sensor** — watches workspace for changes (goals.json, notes, agent output)
@@ -36,6 +37,12 @@ Pulse is a persistent daemon that gives AI agents self-directed initiative. Inst
 - **Mutation system** — agent evolves its own config at runtime
 - **Guardrails** — prevents self-disabling, extreme changes, mutation spam
 - **Audit log** — every self-modification is timestamped and explained
+
+### 🩺 Health Diagnostics
+- **`pulse doctor`** — one command to inspect your full runtime health
+  - Python version, config validity, state/log dirs, daemon status, API reachability, OpenClaw gateway probe
+  - `--json` for machine-readable output; non-zero exit on failure for CI integration
+  - Respects `PULSE_CONFIG` env var for non-default config locations
 
 ### 🚀 Production-Ready
 - **Portable** — runs on Mac, Linux, Pi, VPS, Docker
@@ -72,10 +79,13 @@ cp config/pulse.example.yaml ~/.pulse/config/pulse.yaml
 nano ~/.pulse/config/pulse.yaml  # set webhook_url + webhook_token
 
 # 2. Run
-python3 -m pulse.src
+python3 -m pulse
 
 # 3. Test
 curl http://localhost:9719/health
+
+# 4. Check health
+pulse doctor
 ```
 
 See [docs/deployment.md](docs/deployment.md) for production setup (systemd, Docker, LaunchAgent).
@@ -126,21 +136,28 @@ Optional: architecture diagram from `docs/architecture.md`.
 - Drive engine + sensors + evaluator
 - State persistence + migrations
 - Self-modification system
-- Health monitoring
+- Health monitoring (SPINE, AMYGDALA, IMMUNE)
 
-### Phase 2: Polish (Current)
-- Documentation (this listing!)
-- Example configs
+### Phase 2: Polish (Done ✅)
+- `pulse doctor` health diagnostics CLI
+- CORTEX_EXT learning gap detector
+- Unified `python3 -m pulse <cmd>` entry point
+- Full Black formatting + CI lint stability
+- 879 tests
+
+### Phase 3: Launch (Current)
 - ClawHub submission
 - Product Hunt launch
+- Community Discord (#pulse channel)
+- PyPI publish (`pip install pulse-agent`)
 
-### Phase 3: Integrations
+### Phase 4: Integrations
 - Discord sensor (channel silence detection)
 - X/Twitter sensor (mentions, trends)
 - Calendar sensor (upcoming events)
 - Model-based evaluator improvements
 
-### Phase 4: Advanced
+### Phase 5: Advanced
 - Multi-agent coordination (shared drives)
 - Learning from feedback (RL-lite)
 - Visual dashboard (web UI)

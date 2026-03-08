@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-03-08
+
+### Added
+- **`pulse doctor` — Health diagnostics CLI** — Full runtime health inspection in one command
+  - Checks Python version, module imports, config file presence and validity, state/log directories, daemon process, API reachability, OpenClaw binary + gateway status
+  - Clear `✓`/`✗` output per check; non-zero exit on failure for CI integration
+  - `pulse doctor --json` for machine-readable output
+  - `PULSE_CONFIG` env var support for non-default config locations
+  - `tests/test_cli_doctor.py` — runtime path + gateway probe coverage
+- **CORTEX_EXT — Learning gap detector** — Surfaces silent recurring errors automatically
+  - Monitors THALAMUS broadcast stream for recurring error patterns
+  - Escalates gaps that appear 3+ times to THALAMUS as `learning_gap_escalated` events
+  - Startup-noise filtering: ignores events in the first 60s to avoid false positives from initialization
+  - First real-world catch (same day): surfaced nephron `filter_cycle` firing 5x silently — revealed critical engram format bug
+  - `tests/test_cortex_ext.py`
+- **`python3 -m pulse <cmd>` routing** — Unified entry point for daemon + CLI
+  - No args → daemon (unchanged)
+  - Any args (`doctor`, `spike`, `drives`, etc.) → CLI subcommand
+  - `python3 -m pulse --help` / `python3 -m pulse doctor` both work without config required
+- **Config discovery hardening** — `PULSE_CONFIG` env var + `~` expansion in all CLI commands
+- **Release tooling** in `pyproject.toml` dev extras: `build>=1.2.0`, `twine>=5.0.0`, `black>=24.0`
+
+### Fixed
+- **Nephron engram bug** — `_prune_engrams()` called `.get("memories", [])` on a raw list (3,531-entry flat list) → `AttributeError` silently swallowed on every filter cycle. Fixed: handle both `{"memories": [...]}` dict format and raw list format; use correct `timestamp` field (ms, not `ts`); use `emotion.intensity` as importance proxy.
+  - 2 regression tests added: `test_engram_list_format` + `test_engram_no_attributeerror_on_list`
+- **`python3 -m pulse doctor` traceback** — Running CLI subcommands via `-m pulse` always started daemon and required config. Fixed `pulse/__main__.py` to route on args presence.
+- **Portable `bin/pulse`** — Removed hardcoded Homebrew path; uses `/usr/bin/env bash` + optional `PULSE_PYTHON` override
+- **PyPI build** — Switched `pyproject.toml` build backend to `setuptools.build_meta`; package discovery now includes `src*` and `pulse*`; `python3 -m build` + `twine check` both clean
+- **Black formatting** — Full codebase formatted; `[tool.black]` config in `pyproject.toml` (target-version py311). CI lint now stable.
+
+### Changed
+- Standardized all install/run references across docs to `pip install -e .` + `python3 -m pulse`
+- `project.scripts`: `pulse` → `pulse.src.cli`; `pulse-daemon` → `pulse.src.__main__`
+- Runtime paths (state/log/pid/port) respected by all CLI commands via `PULSE_CONFIG` override
+
+### Test Counts
+- v0.3.0: 787 tests
+- v0.4.0: 879 tests (+92)
+
 ## [0.3.0] - 2026-02-23
 
 ### Added
