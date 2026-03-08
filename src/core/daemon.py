@@ -34,6 +34,7 @@ from pulse.src.core.events import (
     TRIGGER_FAILURE,
     MUTATION_APPLIED,
 )
+from pulse.src.instincts import InstinctExecutor, InstinctRegistry
 from pulse.src.integrations import Integration
 from pulse.src.nervous_system import NervousSystem
 from pulse.src.germinal_tasks import generate_tasks as germinal_generate
@@ -97,6 +98,14 @@ class PulseDaemon:
         self.health = HealthServer(self, port=self.config.daemon.health_port)
         self.mutator = Mutator(self.config, self.drives, state=self.state)
         self.integration = _load_integration(self.config.daemon.integration)
+        self.instinct_registry = None
+        self.instinct_executor = None
+        instincts_config = getattr(self.config, "instincts", None)
+        if instincts_config and getattr(instincts_config, "enabled", False):
+            instincts_dir = self._resolve_instincts_dir()
+            if instincts_dir.exists():
+                self.instinct_registry = InstinctRegistry(instincts_dir)
+                self.instinct_executor = InstinctExecutor()
 
         # Event bus for decoupled side effects
         self.bus = EventBus()
@@ -599,6 +608,16 @@ class PulseDaemon:
                 for d in drive_state.drives:
                     drives_dict[d.name] = d.pressure
 
+            instincts_config = getattr(self.config, "instincts", None)
+            if instincts_config and getattr(
+                instincts_config, "fire_before_generate", False
+            ):
+                instinct_context = self._build_instinct_context()
+                fired_any = self._run_matching_instincts(drives_dict, instinct_context)
+                if fired_any:
+                    self._last_generate_time = now
+                    return
+
             thalamus_recent = []
             try:
                 from pulse.src import thalamus
@@ -683,6 +702,75 @@ class PulseDaemon:
 
         except Exception as e:
             logger.warning(f"GENERATE step failed: {e}")
+
+    def _resolve_instincts_dir(self) -> Path:
+        """Resolve the instincts directory relative to the repository root."""
+        instincts_config = getattr(self.config, "instincts", None)
+        configured_path = getattr(instincts_config, "instincts_dir", "instincts")
+        configured = Path(configured_path).expanduser()
+        if configured.is_absolute():
+            return configured
+        return Path(__file__).resolve().parent.parent.parent / configured
+
+    def _build_instinct_context(self) -> dict:
+        """Build the lightweight context used for instinct matching and execution."""
+        try:
+            from weather_edge_gfs_timer import is_near_gfs_window
+
+            gfs_window = is_near_gfs_window()
+        except ImportError:
+            gfs_window = False
+
+        return {
+            "gfs_window": gfs_window,
+            "hour_utc": datetime.now(timezone.utc).hour,
+        }
+
+    def _run_matching_instincts(self, drives_dict: dict[str, float], context: dict) -> bool:
+        """Fire ready instincts before falling back to GENERATE."""
+        if not self.instinct_registry or not self.instinct_executor:
+            return False
+
+        fired_any = False
+        for instinct in self.instinct_registry.match(drives_dict, context):
+            if not self.instinct_executor.is_ready(instinct):
+                continue
+
+            logger.info(f"INSTINCT: firing {instinct.name}")
+            result = self.instinct_executor.execute(instinct, context)
+            if result.success:
+                logger.info(
+                    f"INSTINCT {instinct.name}: completed in {result.duration_seconds:.1f}s"
+                )
+            else:
+                logger.warning(f"INSTINCT {instinct.name}: failed — {result.error}")
+
+            if self.daily_sync and instinct.output.log:
+                self._log_instinct_result(instinct.name, result.success, result.output)
+            fired_any = True
+
+        return fired_any
+
+    def _log_instinct_result(self, instinct_name: str, success: bool, output: str):
+        """Append instinct execution results to daily notes."""
+        try:
+            path = self.daily_sync._get_file()
+            self._mark_self_write(str(path))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            now_str = datetime.now().strftime("%H:%M")
+            with open(path, "a") as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                try:
+                    self.daily_sync._ensure_header(f)
+                    icon = "✅" if success else "❌"
+                    f.write(f"- {now_str} {icon} INSTINCT: {instinct_name} fired\n")
+                    if output:
+                        for line in output.strip().splitlines()[:5]:
+                            f.write(f"  {line}\n")
+                finally:
+                    fcntl.flock(f, fcntl.LOCK_UN)
+        except OSError as e:
+            logger.warning(f"Failed to sync instinct to daily notes: {e}")
 
     def _load_goals_list(self) -> list:
         """Load current goals as a simple string list."""

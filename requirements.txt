@@ -5,6 +5,7 @@
 aiohttp>=3.9.0        # Async HTTP client + web server
 watchdog>=4.0.0       # Filesystem monitoring
 pyyaml>=6.0.1         # Config file parsing
+requests>=2.31.0      # HTTP client for instinct scripts
 
 # CLI/UX
 rich>=13.7.0          # Beautiful terminal output

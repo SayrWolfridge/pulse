@@ -145,6 +145,13 @@ class GenerativeConfig:
 
 
 @dataclass
+class InstinctsConfig:
+    enabled: bool = True
+    instincts_dir: str = "instincts"
+    fire_before_generate: bool = True
+
+
+@dataclass
 class DaemonConfig:
     loop_interval_seconds: int = 30
     shutdown_timeout: int = 10
@@ -185,6 +192,7 @@ class PulseConfig:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     daemon: DaemonConfig = field(default_factory=DaemonConfig)
     generative: GenerativeConfig = field(default_factory=GenerativeConfig)
+    instincts: InstinctsConfig = field(default_factory=InstinctsConfig)
     parietal: ParietalConfig = field(default_factory=ParietalConfig)
 
     @classmethod
@@ -399,6 +407,17 @@ class PulseConfig:
                 ),
                 min_idle_minutes=g.get(
                     "min_idle_minutes", config.generative.min_idle_minutes
+                ),
+            )
+
+        if "instincts" in data:
+            i = data["instincts"]
+            config.instincts = InstinctsConfig(
+                enabled=i.get("enabled", config.instincts.enabled),
+                instincts_dir=i.get("instincts_dir", config.instincts.instincts_dir),
+                fire_before_generate=i.get(
+                    "fire_before_generate",
+                    config.instincts.fire_before_generate,
                 ),
             )
 
