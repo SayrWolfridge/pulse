@@ -8,6 +8,7 @@ import yaml
 
 # Adjust import path
 import sys
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.core.config import (
@@ -80,9 +81,7 @@ class TestConfigFromYaml:
             os.unlink(path)
 
     def test_custom_drives_threshold(self):
-        path = self._write_yaml({
-            "drives": {"trigger_threshold": 1.5}
-        })
+        path = self._write_yaml({"drives": {"trigger_threshold": 1.5}})
         try:
             config = PulseConfig.load(path)
             assert config.drives.trigger_threshold == 1.5
@@ -90,9 +89,7 @@ class TestConfigFromYaml:
             os.unlink(path)
 
     def test_custom_loop_interval(self):
-        path = self._write_yaml({
-            "daemon": {"loop_interval_seconds": 60}
-        })
+        path = self._write_yaml({"daemon": {"loop_interval_seconds": 60}})
         try:
             config = PulseConfig.load(path)
             assert config.daemon.loop_interval_seconds == 60
@@ -100,9 +97,9 @@ class TestConfigFromYaml:
             os.unlink(path)
 
     def test_evaluator_model_mode(self):
-        path = self._write_yaml({
-            "evaluator": {"mode": "model", "model": {"model": "llama3:8b"}}
-        })
+        path = self._write_yaml(
+            {"evaluator": {"mode": "model", "model": {"model": "llama3:8b"}}}
+        )
         try:
             config = PulseConfig.load(path)
             assert config.evaluator.mode == "model"
@@ -113,6 +110,16 @@ class TestConfigFromYaml:
     def test_nonexistent_file_returns_defaults(self):
         config = PulseConfig.load("/nonexistent/path/pulse.yaml")
         assert config.openclaw.webhook_url == "http://127.0.0.1:18789/hooks/agent"
+
+    def test_env_var_pulse_config_is_honored(self):
+        path = self._write_yaml({"openclaw": {"webhook_token": "envtok"}})
+        os.environ["PULSE_CONFIG"] = path
+        try:
+            config = PulseConfig.load()
+            assert config.openclaw.webhook_token == "envtok"
+        finally:
+            os.unlink(path)
+            del os.environ["PULSE_CONFIG"]
 
 
 class TestWorkspacePathResolution:
@@ -135,9 +142,7 @@ class TestEnvVarSubstitution:
 
     def test_env_var_in_token(self):
         os.environ["_PULSE_TEST_TOKEN"] = "secret-token-123"
-        path = self._write_yaml({
-            "openclaw": {"webhook_token": "${_PULSE_TEST_TOKEN}"}
-        })
+        path = self._write_yaml({"openclaw": {"webhook_token": "${_PULSE_TEST_TOKEN}"}})
         try:
             config = PulseConfig.load(path)
             assert config.openclaw.webhook_token == "secret-token-123"

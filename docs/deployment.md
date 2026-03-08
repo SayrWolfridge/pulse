@@ -29,11 +29,11 @@ Get Pulse running in production — from localhost testing to 24/7 cloud deploym
 
 ```bash
 # Clone or install
-git clone https://github.com/yourusername/pulse.git
+git clone https://github.com/astra-ventures/pulse.git
 cd pulse
 
-# Install dependencies
-pip install -r requirements.txt
+# Install
+pip install -e .
 
 # Or via pip (when published)
 pip install pulse-agent
@@ -43,10 +43,11 @@ pip install pulse-agent
 
 ```bash
 # Copy example config
-cp config/pulse.example.yaml config/pulse.yaml
+mkdir -p ~/.pulse/config
+cp config/pulse.example.yaml ~/.pulse/config/pulse.yaml
 
 # Edit required fields
-nano config/pulse.yaml
+nano ~/.pulse/config/pulse.yaml
 ```
 
 **Minimum required:**
@@ -63,7 +64,7 @@ workspace:
 
 ```bash
 # Foreground (for testing)
-python -m pulse
+python3 -m pulse
 
 # Or use the helper script
 ./bin/run.sh
@@ -82,7 +83,7 @@ curl http://localhost:9720/health
 
 ```bash
 # Manually spike a drive
-python -m pulse spike goals 5.0 "Testing manual trigger"
+python3 -m pulse spike goals 5.0 "Testing manual trigger"
 
 # Watch the logs — should trigger an agent turn within 30s
 ```
@@ -102,16 +103,16 @@ sudo su - pulse
 
 ```bash
 cd ~
-git clone https://github.com/yourusername/pulse.git
+git clone https://github.com/astra-ventures/pulse.git
 cd pulse
-pip install --user -r requirements.txt
+pip install --user -e .
 ```
 
 ### 3. Configure for Production
 
 ```bash
-cp config/pulse.example.yaml ~/.pulse/config.yaml
-nano ~/.pulse/config.yaml
+cp config/pulse.example.yaml ~/.pulse/config/pulse.yaml
+nano ~/.pulse/config/pulse.yaml
 ```
 
 **Production config recommendations:**
@@ -137,14 +138,14 @@ drives:
 ```bash
 # Add to ~/.bashrc or ~/.profile
 export PULSE_HOOK_TOKEN="your-secret-token"
-export PULSE_CONFIG=~/.pulse/config.yaml
+export PULSE_CONFIG=~/.pulse/config/pulse.yaml
 export PULSE_STATE_DIR=~/.pulse
 ```
 
 ### 5. Test Before Daemonizing
 
 ```bash
-python -m pulse
+python3 -m pulse
 # Let it run for 5 minutes, watch for errors
 # Ctrl+C to stop
 ```
@@ -289,7 +290,7 @@ Create `~/Library/LaunchAgents/ai.openclaw.pulse.plist`:
     <array>
         <string>/usr/local/bin/python3</string>
         <string>-m</string>
-        <string>pulse</string>
+        <string>src</string>
     </array>
     
     <key>EnvironmentVariables</key>
@@ -369,13 +370,13 @@ useradd -r -m -s /bin/bash pulse
 su - pulse
 
 # Install Pulse
-git clone https://github.com/yourusername/pulse.git
+git clone https://github.com/astra-ventures/pulse.git
 cd pulse
-pip3 install --user -r requirements.txt
+pip3 install --user -e .
 
 # Configure
-cp config/pulse.example.yaml ~/.pulse/config.yaml
-nano ~/.pulse/config.yaml
+cp config/pulse.example.yaml ~/.pulse/config/pulse.yaml
+nano ~/.pulse/config/pulse.yaml
 
 # Set webhook URL to OpenClaw instance
 # If OpenClaw is on the same machine: http://localhost:8080/hooks/agent
@@ -468,7 +469,7 @@ Pulse will expose `/metrics` endpoint with:
 
 ```bash
 # Check config validity
-python -m pulse validate
+python3 -m pulse doctor
 
 # Check PID lock
 rm ~/.pulse/pulse.pid
@@ -586,11 +587,11 @@ scp pulse-backup.tar.gz newhost:~/
 tar xzf pulse-backup.tar.gz -C ~/
 
 # Update webhook URL
-nano ~/.pulse/config.yaml
+nano ~/.pulse/config/pulse.yaml
 # Change openclaw.webhook_url if needed
 
 # Start
-python -m pulse
+python3 -m pulse
 ```
 
 Your agent picks up exactly where it left off.

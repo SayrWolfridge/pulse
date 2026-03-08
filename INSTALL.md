@@ -25,14 +25,15 @@ python3 --version  # Should show 3.11.x or higher
 git clone https://github.com/astra-ventures/pulse.git
 cd pulse
 
-# 2. Install dependencies
-pip3 install -r requirements.txt
+# 2. Install
+pip3 install -e .
 
-# 3. Copy example config
-cp config/pulse.example.yaml config/pulse.yaml
+# 3. Copy example config (recommended location)
+mkdir -p ~/.pulse/config
+cp config/pulse.example.yaml ~/.pulse/config/pulse.yaml
 
 # 4. Edit config (set your webhook URL + token)
-nano config/pulse.yaml  # or use your preferred editor
+nano ~/.pulse/config/pulse.yaml  # or use your preferred editor
 
 # 5. Run Pulse
 python3 -m pulse
@@ -256,15 +257,15 @@ cd pulse
 python3.11 -m venv venv
 source venv/bin/activate
 
-# Install dependencies
-pip install -r requirements.txt
+# Install
+pip install -e .
 
 # Configure
-cp config/pulse.example.yaml config/pulse.yaml
-nano config/pulse.yaml
+cp config/pulse.example.yaml ~/.pulse/config/pulse.yaml
+nano ~/.pulse/config/pulse.yaml
 
 # Run
-python -m pulse
+python3 -m pulse
 ```
 
 **Run as systemd service:**
@@ -296,7 +297,7 @@ cat ~/.openclaw/config.yaml | grep webhookToken
 
 **Test configuration:**
 ```bash
-python -m pulse --validate-config
+python3 -m pulse doctor
 ```
 
 ---
@@ -307,7 +308,7 @@ python -m pulse --validate-config
 
 **Solution:** Install dependencies:
 ```bash
-pip3 install -r requirements.txt
+pip3 install -e .
 ```
 
 ### "Connection refused" when curling /health

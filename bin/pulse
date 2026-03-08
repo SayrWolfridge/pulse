@@ -1,3 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Pulse CLI — autonomous cognition engine
-exec /opt/homebrew/bin/python3 -m pulse.src.cli "$@"
+# Portable: uses python3 from PATH by default.
+set -euo pipefail
+PYTHON_BIN="${PULSE_PYTHON:-python3}"
+
+# `python -m pulse` routes:
+#   - no args -> daemon
+#   - args    -> CLI
+exec "$PYTHON_BIN" -m pulse "$@"

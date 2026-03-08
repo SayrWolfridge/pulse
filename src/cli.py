@@ -13,10 +13,11 @@ Usage:
     pulse decay <drive> [amt] Decay a drive's pressure
     pulse config              Show current config
     pulse start               Start the daemon
-    pulse stop                Stop the daemon  
+    pulse stop                Stop the daemon
     pulse restart             Restart the daemon
     pulse logs [n]            Show recent log lines
     pulse health              Raw health check
+    pulse doctor              Diagnostic checks for common setup issues
 """
 
 import argparse
@@ -50,14 +51,93 @@ MUTATIONS_FILE = _DEFAULT_STATE_DIR / "mutations.json"
 PLIST = Path("~/Library/LaunchAgents/ai.openclaw.pulse.plist").expanduser()
 
 
+def _candidate_config_path() -> Path | None:
+    """Return the config path Pulse would use (including PULSE_CONFIG override)."""
+    env_cfg = os.environ.get("PULSE_CONFIG")
+    if env_cfg:
+        return Path(os.path.expandvars(env_cfg)).expanduser()
+
+    candidates = [
+        Path("pulse.yaml"),
+        Path("~/.pulse/pulse.yaml").expanduser(),
+        Path("~/.pulse/config/pulse.yaml").expanduser(),
+        Path("~/.pulse/config.yaml").expanduser(),
+        Path(__file__).parent.parent / "config" / "pulse.yaml",
+    ]
+    return next((candidate for candidate in candidates if candidate.exists()), None)
+
+
+def _read_config_snapshot() -> tuple[Path | None, dict, str | None]:
+    """Read raw config YAML without requiring env substitution to succeed."""
+    cfg_path = _candidate_config_path()
+    if not cfg_path:
+        return None, {}, None
+    if not cfg_path.exists():
+        return cfg_path, {}, f"not found: {cfg_path}"
+
+    try:
+        import yaml
+
+        return cfg_path, yaml.safe_load(cfg_path.read_text()) or {}, None
+    except Exception as e:
+        return cfg_path, {}, str(e)
+
+
+def _nested_get(data: dict, *keys, default=None):
+    """Safely read nested config values from a raw dict."""
+    current = data
+    for key in keys:
+        if not isinstance(current, dict) or key not in current:
+            return default
+        current = current[key]
+    return current
+
+
+def _expand_path(value, default: Path) -> Path:
+    """Expand user/env vars for config-driven filesystem paths."""
+    if not value:
+        return default
+    return Path(os.path.expandvars(str(value))).expanduser()
+
+
+def _runtime_paths() -> dict:
+    """Resolve runtime paths/port from config, falling back to defaults."""
+    cfg_path, raw_cfg, cfg_error = _read_config_snapshot()
+
+    state_dir = _expand_path(_nested_get(raw_cfg, "state", "dir"), _DEFAULT_STATE_DIR)
+    log_file = _expand_path(_nested_get(raw_cfg, "logging", "file"), LOG_FILE)
+    pid_file = _expand_path(_nested_get(raw_cfg, "daemon", "pid_file"), PID_FILE)
+    port_raw = _nested_get(raw_cfg, "daemon", "health_port", default=DEFAULT_PORT)
+
+    try:
+        health_port = int(port_raw)
+    except (TypeError, ValueError):
+        health_port = DEFAULT_PORT
+
+    stdout_log = log_file.parent / STDOUT_LOG.name
+
+    return {
+        "config_path": cfg_path,
+        "config_error": cfg_error,
+        "raw_config": raw_cfg,
+        "state_dir": state_dir,
+        "log_file": log_file,
+        "stdout_log": stdout_log,
+        "pid_file": pid_file,
+        "mutations_file": state_dir / "mutations.json",
+        "health_port": health_port,
+    }
+
+
 def _port():
     """Get health port from config or default."""
-    return DEFAULT_PORT
+    return _runtime_paths()["health_port"]
 
 
 def _get(endpoint: str) -> dict:
     """GET a JSON endpoint from the health API."""
     import urllib.request
+
     url = f"{HEALTH_URL.format(port=_port())}{endpoint}"
     try:
         with urllib.request.urlopen(url, timeout=3) as resp:
@@ -66,11 +146,31 @@ def _get(endpoint: str) -> dict:
         return None
 
 
+def _post(endpoint: str, payload: dict) -> dict:
+    """POST JSON to a health endpoint and parse JSON response."""
+    import urllib.request
+
+    url = f"{HEALTH_URL.format(port=_port())}{endpoint}"
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read())
+    except Exception:
+        return None
+
+
 def _is_running() -> tuple:
     """Check if daemon is running. Returns (running, pid)."""
-    if PID_FILE.exists():
+    pid_file = _runtime_paths()["pid_file"]
+    if pid_file.exists():
         try:
-            pid = int(PID_FILE.read_text().strip())
+            pid = int(pid_file.read_text().strip())
             os.kill(pid, 0)
             return True, pid
         except (ValueError, ProcessLookupError, PermissionError):
@@ -125,13 +225,14 @@ def _pressure_bar(pressure: float, max_p: float = 5.0, width: int = 20) -> Text:
 
 def _write_mutation_queue(mutations: list):
     """Write mutations to queue with file locking (matches daemon's lock)."""
-    MUTATIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Touch the file if it doesn't exist
-    if not MUTATIONS_FILE.exists():
-        MUTATIONS_FILE.write_text("[]")
+    mutations_file = _runtime_paths()["mutations_file"]
+    mutations_file.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(MUTATIONS_FILE, "r+") as f:
+    # Touch the file if it doesn't exist
+    if not mutations_file.exists():
+        mutations_file.write_text("[]")
+
+    with open(mutations_file, "r+") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         try:
             raw = f.read().strip()
@@ -159,12 +260,12 @@ _PRESETS = {
         "name": "Personal Assistant",
         "desc": "Curiosity, growth, social, goals — balanced autonomous agent",
         "drives": {
-            "goals":     {"weight": 1.2},
+            "goals": {"weight": 1.2},
             "curiosity": {"weight": 0.8},
-            "emotions":  {"weight": 0.9},
-            "growth":    {"weight": 0.7},
-            "social":    {"weight": 0.6},
-            "unfinished":{"weight": 0.9},
+            "emotions": {"weight": 0.9},
+            "growth": {"weight": 0.7},
+            "social": {"weight": 0.6},
+            "unfinished": {"weight": 0.9},
         },
     },
     "2": {
@@ -172,9 +273,9 @@ _PRESETS = {
         "desc": "Curiosity and unfinished work dominate — deep focus mode",
         "drives": {
             "curiosity": {"weight": 1.5},
-            "unfinished":{"weight": 1.3},
-            "goals":     {"weight": 0.8},
-            "growth":    {"weight": 0.6},
+            "unfinished": {"weight": 1.3},
+            "goals": {"weight": 0.8},
+            "growth": {"weight": 0.6},
         },
     },
     "3": {
@@ -182,7 +283,7 @@ _PRESETS = {
         "desc": "Just the system health drive — lowest pressure, quiet agent",
         "drives": {
             "system": {"weight": 1.0},
-            "goals":  {"weight": 0.8},
+            "goals": {"weight": 0.8},
         },
     },
 }
@@ -228,19 +329,21 @@ def cmd_init(args):
     import shutil
 
     console.print()
-    console.print(Panel(
-        "[bold cyan]Welcome to Pulse[/bold cyan]\n"
-        "[dim]Autonomous cognition engine for OpenClaw agents[/dim]\n\n"
-        "This wizard will set up your Pulse configuration.\n"
-        "Takes about 2-3 minutes.",
-        title="🫀 [bold]pulse init[/bold]",
-        border_style="cyan",
-    ))
+    console.print(
+        Panel(
+            "[bold cyan]Welcome to Pulse[/bold cyan]\n"
+            "[dim]Autonomous cognition engine for OpenClaw agents[/dim]\n\n"
+            "This wizard will set up your Pulse configuration.\n"
+            "Takes about 2-3 minutes.",
+            title="🫀 [bold]pulse init[/bold]",
+            border_style="cyan",
+        )
+    )
     console.print()
 
-    config_dir  = Path("~/.pulse/config").expanduser()
+    config_dir = Path("~/.pulse/config").expanduser()
     config_file = config_dir / "pulse.yaml"
-    env_file    = Path("~/.pulse/.env").expanduser()
+    env_file = Path("~/.pulse/.env").expanduser()
 
     # ── Check existing config ──────────────────────────────────────────────────
     if config_file.exists():
@@ -256,9 +359,13 @@ def cmd_init(args):
     console.print("[dim]Or run: openclaw config | grep HOOKS_TOKEN[/dim]")
     console.print()
 
-    env_token = os.environ.get("PULSE_HOOK_TOKEN") or os.environ.get("OPENCLAW_HOOKS_TOKEN", "")
+    env_token = os.environ.get("PULSE_HOOK_TOKEN") or os.environ.get(
+        "OPENCLAW_HOOKS_TOKEN", ""
+    )
     if env_token:
-        console.print(f"[green]✓ Found token in environment[/green] (first 8 chars: {env_token[:8]}...)")
+        console.print(
+            f"[green]✓ Found token in environment[/green] (first 8 chars: {env_token[:8]}...)"
+        )
         token = env_token
     else:
         token = console.input("Webhook token: ").strip()
@@ -303,7 +410,11 @@ def cmd_init(args):
     env_content = f"PULSE_HOOK_TOKEN={token}\n"
     if env_file.exists():
         # Preserve existing, update/add PULSE_HOOK_TOKEN
-        lines = [ln for ln in env_file.read_text().splitlines() if not ln.startswith("PULSE_HOOK_TOKEN=")]
+        lines = [
+            ln
+            for ln in env_file.read_text().splitlines()
+            if not ln.startswith("PULSE_HOOK_TOKEN=")
+        ]
         lines.append(f"PULSE_HOOK_TOKEN={token}")
         env_file.write_text("\n".join(lines) + "\n")
     else:
@@ -317,18 +428,24 @@ def cmd_init(args):
         console.print(f"[dim]LaunchAgent already installed at {plist}[/dim]")
         install_la = False
     else:
-        la_answer = console.input("Install LaunchAgent (auto-start on login)? [Y/n] ").strip().lower()
+        la_answer = (
+            console.input("Install LaunchAgent (auto-start on login)? [Y/n] ")
+            .strip()
+            .lower()
+        )
         install_la = la_answer != "n"
 
     if install_la and not plist.exists():
         # Find the pulse binary
-        pulse_bin = shutil.which("pulse") or str(Path("~/.local/bin/pulse").expanduser())
-        run_sh    = Path("~/.pulse/run.sh").expanduser()
+        pulse_bin = shutil.which("pulse") or str(
+            Path("~/.local/bin/pulse").expanduser()
+        )
+        run_sh = Path("~/.pulse/run.sh").expanduser()
 
         run_sh_content = f"""#!/bin/bash
 set -a; source ~/.pulse/.env; set +a
 cd {workspace}
-exec {pulse_bin or 'python3 -m pulse.src'}
+exec {pulse_bin or 'python3 -m pulse'}
 """
         run_sh.write_text(run_sh_content)
         run_sh.chmod(0o755)
@@ -372,26 +489,31 @@ exec {pulse_bin or 'python3 -m pulse.src'}
 
     # ── Done ───────────────────────────────────────────────────────────────────
     console.print()
-    console.print(Panel(
-        "[bold green]Setup complete![/bold green]\n\n"
-        f"  Config:  [dim]{config_file}[/dim]\n"
-        f"  Preset:  [dim]{preset['name']}[/dim]\n\n"
-        "  [bold]pulse status[/bold]   — check if daemon is running\n"
-        "  [bold]pulse drives[/bold]   — see drive pressure levels\n"
-        "  [bold]pulse logs[/bold]     — watch the log stream\n"
-        "  [bold]pulse stop[/bold]     — stop the daemon",
-        title="🫀 [bold]Pulse is ready[/bold]",
-        border_style="green",
-    ))
+    console.print(
+        Panel(
+            "[bold green]Setup complete![/bold green]\n\n"
+            f"  Config:  [dim]{config_file}[/dim]\n"
+            f"  Preset:  [dim]{preset['name']}[/dim]\n\n"
+            "  [bold]pulse status[/bold]   — check if daemon is running\n"
+            "  [bold]pulse drives[/bold]   — see drive pressure levels\n"
+            "  [bold]pulse logs[/bold]     — watch the log stream\n"
+            "  [bold]pulse stop[/bold]     — stop the daemon",
+            title="🫀 [bold]Pulse is ready[/bold]",
+            border_style="green",
+        )
+    )
 
 
 def cmd_status(args):
     """Show full status overview."""
+    runtime = _runtime_paths()
     running, pid = _is_running()
 
     # Header
     console.print()
-    console.print("🫀 [bold magenta]Pulse[/] — Autonomous Cognition Engine", highlight=False)
+    console.print(
+        "🫀 [bold magenta]Pulse[/] — Autonomous Cognition Engine", highlight=False
+    )
     console.print()
 
     # Status table
@@ -408,14 +530,14 @@ def cmd_status(args):
         if health:
             table.add_row("Uptime", _format_duration(health.get("uptime_seconds", 0)))
             table.add_row("Triggers", str(health.get("turn_count", 0)))
-        
+
         if status_data:
             # Rate limits
             rl = status_data.get("rate_limit", {})
             table.add_row(
                 "Rate",
                 f"{rl.get('turns_last_hour', 0)}/{rl.get('max_per_hour', 10)} turns/hr · "
-                f"cooldown {rl.get('cooldown_remaining', 0)}s"
+                f"cooldown {rl.get('cooldown_remaining', 0)}s",
             )
 
             # Last trigger
@@ -443,26 +565,28 @@ def cmd_status(args):
                 table.add_row(
                     "Drives",
                     f"{len(drives)} active · top: [bold]{top[0]}[/] "
-                    f"({top[1].get('pressure', 0):.1f}) · total pressure: {total:.1f}"
+                    f"({top[1].get('pressure', 0):.1f}) · total pressure: {total:.1f}",
                 )
 
             # Trigger stats
             if ts.get("total", 0) > 0:
                 table.add_row(
                     "Trigger stats",
-                    f"{ts.get('total', 0)} total · {ts.get('successful', 0)} successful"
+                    f"{ts.get('total', 0)} total · {ts.get('successful', 0)} successful",
                 )
-        
+
         table.add_row("Health", f"http://127.0.0.1:{_port()}")
         table.add_row("Service", "LaunchAgent" if PLIST.exists() else "[dim]manual[/]")
-        table.add_row("State", str(_DEFAULT_STATE_DIR))
-        table.add_row("Logs", str(STDOUT_LOG))
+        table.add_row("State", str(runtime["state_dir"]))
+        table.add_row("Logs", str(runtime["stdout_log"]))
     else:
         table.add_row("Status", "[red bold]● stopped[/]")
-        table.add_row("Service", "LaunchAgent" if PLIST.exists() else "[dim]not installed[/]")
-        table.add_row("State", str(_DEFAULT_STATE_DIR))
-        if _DEFAULT_STATE_DIR.exists():
-            state_file = _DEFAULT_STATE_DIR / "pulse-state.json"
+        table.add_row(
+            "Service", "LaunchAgent" if PLIST.exists() else "[dim]not installed[/]"
+        )
+        table.add_row("State", str(runtime["state_dir"]))
+        if runtime["state_dir"].exists():
+            state_file = runtime["state_dir"] / "pulse-state.json"
             if state_file.exists():
                 try:
                     data = json.loads(state_file.read_text())
@@ -480,6 +604,7 @@ def cmd_status(args):
 
 def cmd_drives(args):
     """Show all drives with pressure visualization."""
+    runtime = _runtime_paths()
     running, _ = _is_running()
 
     max_p = 5.0  # default
@@ -493,7 +618,7 @@ def cmd_drives(args):
         max_p = data.get("max_pressure", 5.0)
     else:
         # Read from state file
-        state_file = _DEFAULT_STATE_DIR / "pulse-state.json"
+        state_file = runtime["state_dir"] / "pulse-state.json"
         if not state_file.exists():
             console.print("[dim]No drive state found[/]")
             return
@@ -518,7 +643,9 @@ def cmd_drives(args):
     # Sort by weighted pressure descending
     sorted_drives = sorted(
         drives.items(),
-        key=lambda x: x[1].get("weighted", x[1].get("pressure", 0) * x[1].get("weight", 1)),
+        key=lambda x: x[1].get(
+            "weighted", x[1].get("pressure", 0) * x[1].get("weight", 1)
+        ),
         reverse=True,
     )
 
@@ -540,20 +667,25 @@ def cmd_drives(args):
 
     console.print(table)
 
-    total = sum(d.get("weighted", d.get("pressure", 0) * d.get("weight", 1)) for d in drives.values())
+    total = sum(
+        d.get("weighted", d.get("pressure", 0) * d.get("weight", 1))
+        for d in drives.values()
+    )
     console.print(f"\n  Total weighted pressure: [bold]{total:.2f}[/]")
-    
+
     # Show threshold
     if running:
         status = _get("/status")
         if status:
-            console.print(f"  Trigger threshold: {status.get('trigger_threshold', '?')}")
+            console.print(
+                f"  Trigger threshold: {status.get('trigger_threshold', '?')}"
+            )
     console.print()
 
 
 def cmd_triggers(args):
     """Show recent trigger history."""
-    history_file = _DEFAULT_STATE_DIR / "trigger-history.jsonl"
+    history_file = _runtime_paths()["state_dir"] / "trigger-history.jsonl"
     if not history_file.exists():
         console.print("[dim]No trigger history yet[/]")
         return
@@ -600,7 +732,7 @@ def cmd_triggers(args):
 
 def cmd_mutations(args):
     """Show mutation audit log."""
-    log_file = _DEFAULT_STATE_DIR / "mutations.jsonl"
+    log_file = _runtime_paths()["state_dir"] / "mutations.jsonl"
     if not log_file.exists():
         console.print("[dim]No mutations recorded yet[/]")
         return
@@ -648,7 +780,7 @@ def cmd_mutations(args):
         table.add_row(dt, mut_type, target, change, clamped, reason)
 
     console.print(table)
-    
+
     total = 0
     clamped = 0
     with open(log_file) as f:
@@ -675,37 +807,57 @@ def cmd_mutate(args):
         # Interactive mode
         console.print("🧬 [bold]Submit Mutation[/]\n")
         console.print("Types: adjust_weight, adjust_threshold, adjust_rate,")
-        console.print("       adjust_cooldown, add_drive, remove_drive, spike_drive, decay_drive\n")
-        
+        console.print(
+            "       adjust_cooldown, add_drive, remove_drive, spike_drive, decay_drive\n"
+        )
+
         mut_type = console.input("[bold]Type:[/] ").strip()
         if not mut_type:
             return
 
         mutation = {"type": mut_type}
-        
+
         # Get valid drive names for validation
         valid_drives = set()
         status = _get("/status")
         if status:
             valid_drives = set(status.get("drives", {}).keys())
-        
+
         if mut_type in ("adjust_weight", "remove_drive", "spike_drive", "decay_drive"):
             if valid_drives:
                 console.print(f"  [dim]Available: {', '.join(sorted(valid_drives))}[/]")
             drive_name = console.input("[bold]Drive name:[/] ").strip()
-            if valid_drives and drive_name not in valid_drives and mut_type != "spike_drive":
-                console.print(f"[yellow]Warning: '{drive_name}' not in current drives[/]")
+            if (
+                valid_drives
+                and drive_name not in valid_drives
+                and mut_type != "spike_drive"
+            ):
+                console.print(
+                    f"[yellow]Warning: '{drive_name}' not in current drives[/]"
+                )
             mutation["drive"] = drive_name
         if mut_type == "add_drive":
             mutation["name"] = console.input("[bold]Drive name:[/] ").strip()
-        if mut_type in ("adjust_weight", "adjust_threshold", "adjust_rate", "adjust_cooldown", "adjust_turns_per_hour"):
+        if mut_type in (
+            "adjust_weight",
+            "adjust_threshold",
+            "adjust_rate",
+            "adjust_cooldown",
+            "adjust_turns_per_hour",
+        ):
             mutation["value"] = float(console.input("[bold]Value:[/] ").strip())
         if mut_type == "add_drive":
-            mutation["weight"] = float(console.input("[bold]Weight (0.1-2.0):[/] ").strip() or "0.5")
+            mutation["weight"] = float(
+                console.input("[bold]Weight (0.1-2.0):[/] ").strip() or "0.5"
+            )
         if mut_type in ("spike_drive", "decay_drive"):
-            mutation["amount"] = float(console.input("[bold]Amount:[/] ").strip() or "0.3")
-        
-        mutation["reason"] = console.input("[bold]Reason:[/] ").strip() or "manual CLI mutation"
+            mutation["amount"] = float(
+                console.input("[bold]Amount:[/] ").strip() or "0.3"
+            )
+
+        mutation["reason"] = (
+            console.input("[bold]Reason:[/] ").strip() or "manual CLI mutation"
+        )
 
     # Write to queue with locking
     items = mutation if isinstance(mutation, list) else [mutation]
@@ -723,7 +875,9 @@ def cmd_spike(args):
         "reason": "manual spike via CLI",
     }
     _write_mutation_queue([mutation])
-    console.print(f"[green]✓[/] Spiked [bold]{args.drive}[/] +{args.amount} → next cycle")
+    console.print(
+        f"[green]✓[/] Spiked [bold]{args.drive}[/] +{args.amount} → next cycle"
+    )
 
 
 def cmd_decay(args):
@@ -735,7 +889,9 @@ def cmd_decay(args):
         "reason": "manual decay via CLI",
     }
     _write_mutation_queue([mutation])
-    console.print(f"[green]✓[/] Decayed [bold]{args.drive}[/] -{args.amount} → next cycle")
+    console.print(
+        f"[green]✓[/] Decayed [bold]{args.drive}[/] -{args.amount} → next cycle"
+    )
 
 
 _GENOME_FILE = _DEFAULT_STATE_DIR / "genome.json"
@@ -745,17 +901,38 @@ _DEFAULT_GENOME = {
     "version": "3.0",
     "created_at": 0,
     "modules": {
-        "endocrine": {"decay_rates": {"cortisol": -0.05, "dopamine": -0.08, "serotonin": -0.02,
-                                      "oxytocin": -0.04, "adrenaline": -0.28, "melatonin": -0.01},
-                      "high_threshold": 0.5, "low_threshold": 0.3},
-        "limbic":    {"half_life_ms": 14400000, "decay_threshold": 0.5, "contagion_multiplier": 0.5},
-        "retina":    {"default_threshold": 0.3, "focus_threshold": 0.8},
-        "circadian": {"dawn_hours": [6, 9], "daylight_hours": [9, 17], "golden_hours": [17, 22]},
-        "amygdala":  {"fast_path_threshold": 0.7},
+        "endocrine": {
+            "decay_rates": {
+                "cortisol": -0.05,
+                "dopamine": -0.08,
+                "serotonin": -0.02,
+                "oxytocin": -0.04,
+                "adrenaline": -0.28,
+                "melatonin": -0.01,
+            },
+            "high_threshold": 0.5,
+            "low_threshold": 0.3,
+        },
+        "limbic": {
+            "half_life_ms": 14400000,
+            "decay_threshold": 0.5,
+            "contagion_multiplier": 0.5,
+        },
+        "retina": {"default_threshold": 0.3, "focus_threshold": 0.8},
+        "circadian": {
+            "dawn_hours": [6, 9],
+            "daylight_hours": [9, 17],
+            "golden_hours": [17, 22],
+        },
+        "amygdala": {"fast_path_threshold": 0.7},
         "phenotype": {"default_humor": 0.3, "default_intensity": 0.5},
-        "telomere":  {"drift_threshold": 0.3},
-        "hypothalamus": {"signal_threshold": 3, "retirement_days": 30, "weight_floor": 0.1},
-        "soma":      {"energy_cost_per_token": 0.001, "rem_replenish": 0.5},
+        "telomere": {"drift_threshold": 0.3},
+        "hypothalamus": {
+            "signal_threshold": 3,
+            "retirement_days": 30,
+            "weight_floor": 0.1,
+        },
+        "soma": {"energy_cost_per_token": 0.001, "rem_replenish": 0.5},
     },
 }
 
@@ -809,7 +986,9 @@ def cmd_genome(args):
         console.print(f"[green]✓[/] Genome imported from [bold]{path}[/] — {n} modules")
         console.print(f"  Version: {incoming.get('version', '?')}")
         if _is_running()[0]:
-            console.print("  [dim]Note: restart daemon to apply changes: [bold]pulse restart[/][/]")
+            console.print(
+                "  [dim]Note: restart daemon to apply changes: [bold]pulse restart[/][/]"
+            )
 
     elif sub == "diff":
         path = Path(args.file)
@@ -862,13 +1041,15 @@ def cmd_genome(args):
 
         n_modules = len(modules)
         console.print()
-        console.print(Panel(
-            f"Version: [bold]{g.get('version', '?')}[/]  │  "
-            f"Modules: [bold]{n_modules}[/]  │  "
-            f"Source: [dim]{source}[/]",
-            title="🧬 Pulse Genome",
-            border_style="magenta",
-        ))
+        console.print(
+            Panel(
+                f"Version: [bold]{g.get('version', '?')}[/]  │  "
+                f"Modules: [bold]{n_modules}[/]  │  "
+                f"Source: [dim]{source}[/]",
+                title="🧬 Pulse Genome",
+                border_style="magenta",
+            )
+        )
 
         table = Table(box=box.SIMPLE_HEAVY, padding=(0, 1), show_edge=False)
         table.add_column("Module", style="cyan")
@@ -891,17 +1072,25 @@ def cmd_genome(args):
 
 def cmd_plugin(args):
     """Manage Pulse plugins — list, discover, and inspect loaded plugins."""
-    from pulse.src.plugin_registry import PluginRegistry, discover_plugins, _DEFAULT_PLUGIN_DIR
+    from pulse.src.plugin_registry import (
+        PluginRegistry,
+        discover_plugins,
+        _DEFAULT_PLUGIN_DIR,
+    )
 
     sub = getattr(args, "plugin_cmd", None) or "list"
 
     reg = PluginRegistry.get()
 
     if sub == "discover":
-        plugin_dir = Path(args.dir) if getattr(args, "dir", None) else _DEFAULT_PLUGIN_DIR
+        plugin_dir = (
+            Path(args.dir) if getattr(args, "dir", None) else _DEFAULT_PLUGIN_DIR
+        )
         n, errors = discover_plugins(registry=reg, plugin_dir=plugin_dir)
         if n > 0:
-            console.print(f"[green]✓[/] Discovered and registered {n} plugin(s) from {plugin_dir}")
+            console.print(
+                f"[green]✓[/] Discovered and registered {n} plugin(s) from {plugin_dir}"
+            )
         else:
             console.print(f"[yellow]○[/] No new plugins found in {plugin_dir}")
         for err in errors:
@@ -914,8 +1103,14 @@ def cmd_plugin(args):
             console.print("[dim]No plugins registered.[/]")
             return
         from rich.table import Table
-        table = Table(title="Plugin Health", box=None, show_header=True,
-                      header_style="bold dim", padding=(0, 1))
+
+        table = Table(
+            title="Plugin Health",
+            box=None,
+            show_header=True,
+            header_style="bold dim",
+            padding=(0, 1),
+        )
         table.add_column("Name")
         table.add_column("Version")
         table.add_column("Status")
@@ -939,8 +1134,14 @@ def cmd_plugin(args):
         return
 
     from rich.table import Table
-    table = Table(title=f"Loaded Plugins ({reg.count})", box=None, show_header=True,
-                  header_style="bold dim", padding=(0, 1))
+
+    table = Table(
+        title=f"Loaded Plugins ({reg.count})",
+        box=None,
+        show_header=True,
+        header_style="bold dim",
+        padding=(0, 1),
+    )
     table.add_column("Name")
     table.add_column("Version")
     table.add_column("Description")
@@ -960,28 +1161,17 @@ def cmd_plugin(args):
 
 def cmd_config(args):
     """Show current configuration."""
-    # Find config file
-    candidates = [
-        Path("pulse.yaml"),
-        Path("~/.pulse/pulse.yaml").expanduser(),
-        Path(__file__).parent.parent / "config" / "pulse.yaml",
-    ]
-    
-    config_path = None
-    for c in candidates:
-        if c.exists():
-            config_path = c
-            break
+    config_path, config, config_error = _read_config_snapshot()
 
     if not config_path:
         console.print("[red]No pulse.yaml found[/]")
         return
 
+    if config_error:
+        console.print(f"[red]Could not read config[/] — {config_error}")
+        return
+
     console.print(f"🫀 [bold magenta]Pulse Config[/] — {config_path}\n")
-    
-    import yaml
-    with open(config_path) as f:
-        config = yaml.safe_load(f)
 
     # Pretty print key sections
     table = Table(box=box.ROUNDED, show_header=False, padding=(0, 2))
@@ -1012,7 +1202,10 @@ def cmd_config(args):
 
     cats = d.get("categories", {})
     for name, cat in cats.items():
-        table.add_row(f"Drive: {name}", f"weight={cat.get('weight', '?')}, source={cat.get('source', '?')}")
+        table.add_row(
+            f"Drive: {name}",
+            f"weight={cat.get('weight', '?')}, source={cat.get('source', '?')}",
+        )
 
     console.print(table)
     console.print()
@@ -1033,13 +1226,19 @@ def cmd_superego(args):
     if sub == "scan":
         text = getattr(args, "text", "") or ""
         if not text:
-            console.print("[red]✗[/] Provide text to scan: pulse superego scan 'your text here'")
+            console.print(
+                "[red]✗[/] Provide text to scan: pulse superego scan 'your text here'"
+            )
             return
         result = superego.scan_response(text, source="cli")
         score = result["compliance_score"]
         assessment = result["assessment"]
-        color = {"clean": "green", "drift_minor": "yellow",
-                 "drift_moderate": "orange3", "drift_severe": "red"}.get(assessment, "white")
+        color = {
+            "clean": "green",
+            "drift_minor": "yellow",
+            "drift_moderate": "orange3",
+            "drift_severe": "red",
+        }.get(assessment, "white")
         console.print(f"\n🧠 [bold]SUPEREGO Scan[/]\n")
         console.print(f"  Score:      [{color}]{score:.3f}[/]")
         console.print(f"  Assessment: [{color}]{assessment}[/]")
@@ -1059,8 +1258,14 @@ def cmd_superego(args):
             console.print("[dim]No compliance records yet.[/]")
             return
         from rich.table import Table
-        table = Table(title="SUPEREGO Compliance Trend (last 20)", box=None,
-                      show_header=True, header_style="bold dim", padding=(0, 1))
+
+        table = Table(
+            title="SUPEREGO Compliance Trend (last 20)",
+            box=None,
+            show_header=True,
+            header_style="bold dim",
+            padding=(0, 1),
+        )
         table.add_column("Time")
         table.add_column("Score")
         table.add_column("Assessment")
@@ -1069,10 +1274,16 @@ def cmd_superego(args):
             ts = time.strftime("%H:%M:%S", time.localtime(r["ts"]))
             score = r["score"]
             a = r["assessment"]
-            color = {"clean": "green", "drift_minor": "yellow",
-                     "drift_moderate": "orange3", "drift_severe": "red"}.get(a, "white")
+            color = {
+                "clean": "green",
+                "drift_minor": "yellow",
+                "drift_moderate": "orange3",
+                "drift_severe": "red",
+            }.get(a, "white")
             drift_labels = ", ".join(r.get("drift_labels", [])) or "—"
-            table.add_row(ts, f"[{color}]{score:.3f}[/]", f"[{color}]{a}[/]", drift_labels)
+            table.add_row(
+                ts, f"[{color}]{score:.3f}[/]", f"[{color}]{a}[/]", drift_labels
+            )
         console.print(table)
         return
 
@@ -1087,10 +1298,14 @@ def cmd_superego(args):
     console.print(f"  Compliance:    [{color}]{compliance:.3f}[/] (running EMA)")
     console.print(f"  Recent avg:    {status['recent_avg']:.3f} (last 10 checks)")
     console.print(f"  Checks run:    {status['checks_run']}")
-    console.print(f"  Drift events:  {status['drift_events']} ({status['drift_rate']:.1%} drift rate)")
+    console.print(
+        f"  Drift events:  {status['drift_events']} ({status['drift_rate']:.1%} drift rate)"
+    )
     console.print(f"  Severe drifts: {status['severe_drift_events']}")
     if status["active_correction"]:
-        console.print(f"  [bold red]⚠ Active correction mode — last scan detected severe drift[/]")
+        console.print(
+            f"  [bold red]⚠ Active correction mode — last scan detected severe drift[/]"
+        )
     if status["last_check"]:
         last = time.strftime("%H:%M:%S", time.localtime(status["last_check"]))
         console.print(f"  Last check:    {last}")
@@ -1121,7 +1336,7 @@ def cmd_start(args):
         console.print("[dim]No LaunchAgent installed. Starting in foreground...[/]")
         os.execvp(
             sys.executable,
-            [sys.executable, "-m", "pulse.src"],
+            [sys.executable, "-m", "pulse"],
         )
 
 
@@ -1147,7 +1362,7 @@ def cmd_stop(args):
         if not r:
             console.print("[green]✓[/] Pulse stopped")
             return
-    
+
     console.print("[yellow]Sent stop signal — daemon may still be shutting down[/]")
 
 
@@ -1164,7 +1379,10 @@ def cmd_restart(args):
 
 def cmd_logs(args):
     """Show recent log lines."""
-    log = STDOUT_LOG if STDOUT_LOG.exists() else LOG_FILE
+    runtime = _runtime_paths()
+    stdout_log = runtime["stdout_log"]
+    log_file = runtime["log_file"]
+    log = stdout_log if stdout_log.exists() else log_file
     if not log.exists():
         console.print("[dim]No log file found[/]")
         return
@@ -1199,26 +1417,57 @@ def cmd_help(args):
 
     commands_info = [
         ("", "[bold]Setup[/]"),
-        ("pulse init", "Interactive first-run wizard — token, workspace, preset, LaunchAgent"),
+        (
+            "pulse init",
+            "Interactive first-run wizard — token, workspace, preset, LaunchAgent",
+        ),
         ("", "[bold]Status & Monitoring[/]"),
         ("pulse", "Show status overview (same as pulse status)"),
         ("pulse status", "Daemon health, uptime, drive summary, trigger stats"),
-        ("pulse drives", "All drives with pressure bars, weights, and last-addressed times"),
-        ("pulse triggers [-n 20]", "Recent trigger history with success/failure and reasons"),
-        ("pulse mutations [-n 20]", "Mutation audit log — every self-modification recorded"),
+        (
+            "pulse drives",
+            "All drives with pressure bars, weights, and last-addressed times",
+        ),
+        (
+            "pulse triggers [-n 20]",
+            "Recent trigger history with success/failure and reasons",
+        ),
+        (
+            "pulse mutations [-n 20]",
+            "Mutation audit log — every self-modification recorded",
+        ),
         ("pulse health", "Raw JSON from /health, /status, and /evolution endpoints"),
-        ("pulse logs [-n 30]", "Colored log viewer (errors red, triggers magenta, mutations cyan)"),
+        ("pulse doctor", "Read-only diagnostics for common setup/runtime issues"),
+        (
+            "pulse logs [-n 30]",
+            "Colored log viewer (errors red, triggers magenta, mutations cyan)",
+        ),
         ("pulse config", "Show current configuration from pulse.yaml"),
         ("", ""),
         ("", "[bold]Drive Control[/]"),
-        ("pulse spike <drive> [amount]", "Spike a drive's pressure (default +0.3). Applied next cycle."),
-        ("pulse decay <drive> [amount]", "Decay a drive's pressure (default -0.3). Applied next cycle."),
+        (
+            "pulse spike <drive> [amount]",
+            "Spike a drive's pressure (default +0.3). Applied next cycle.",
+        ),
+        (
+            "pulse decay <drive> [amount]",
+            "Decay a drive's pressure (default -0.3). Applied next cycle.",
+        ),
         ("", ""),
         ("", "[bold]Self-Modification[/]"),
-        ("pulse mutate", "Interactive mutation builder — walks you through type, target, value"),
-        ("pulse mutate '<json>'", "Submit a mutation as raw JSON. Queued for next cycle (~30s)."),
+        (
+            "pulse mutate",
+            "Interactive mutation builder — walks you through type, target, value",
+        ),
+        (
+            "pulse mutate '<json>'",
+            "Submit a mutation as raw JSON. Queued for next cycle (~30s).",
+        ),
         ("", "  Types: adjust_weight, adjust_threshold, adjust_rate, adjust_cooldown,"),
-        ("", "         adjust_turns_per_hour, add_drive, remove_drive, spike_drive, decay_drive"),
+        (
+            "",
+            "         adjust_turns_per_hour, add_drive, remove_drive, spike_drive, decay_drive",
+        ),
         ("", ""),
         ("", "[bold]Genome (DNA Config)[/]"),
         ("pulse genome", "Show current genome — all module thresholds and weights"),
@@ -1242,15 +1491,25 @@ def cmd_help(args):
     console.print("  -h, --help    Show this help\n")
 
     console.print("[bold]Examples:[/]")
-    console.print("  pulse spike curiosity 0.5          [dim]# Boost curiosity drive[/]")
-    console.print("  pulse decay system 1.0             [dim]# Reduce system pressure[/]")
-    console.print('  pulse mutate \'{"type": "add_drive", "name": "art", "weight": 0.6, "reason": "creative exploration"}\'')
+    console.print(
+        "  pulse spike curiosity 0.5          [dim]# Boost curiosity drive[/]"
+    )
+    console.print(
+        "  pulse decay system 1.0             [dim]# Reduce system pressure[/]"
+    )
+    console.print(
+        '  pulse mutate \'{"type": "add_drive", "name": "art", "weight": 0.6, "reason": "creative exploration"}\''
+    )
     console.print("  pulse triggers -n 5                [dim]# Last 5 triggers[/]")
     console.print("  pulse logs -n 50                   [dim]# Last 50 log lines[/]")
     console.print()
 
-    console.print("[dim]State: ~/.pulse/state/ · Logs: ~/.pulse/logs/ · Config: pulse/config/pulse.yaml[/]")
-    console.print("[dim]Health API: http://127.0.0.1:9720 (/health, /status, /evolution, /mutations)[/]")
+    console.print(
+        "[dim]State: ~/.pulse/state/ · Logs: ~/.pulse/logs/ · Config: pulse/config/pulse.yaml[/]"
+    )
+    console.print(
+        "[dim]Health API: http://127.0.0.1:9720 (/health, /status, /evolution, /mutations)[/]"
+    )
     console.print()
 
 
@@ -1270,7 +1529,204 @@ def cmd_health(args):
             console.print(f"\n[red]{endpoint}: unreachable[/]")
 
 
+def cmd_doctor(args):
+    """Run diagnostic checks for common setup/runtime issues."""
+    import socket
+    import shutil
+    import platform
+
+    # We keep this command safe: read-only checks, no network except localhost.
+    checks = []
+
+    def add(name: str, ok: bool, detail: str = ""):
+        checks.append((name, ok, detail))
+
+    # ── Runtime / Python ─────────────────────────────────────────────────────
+    py = sys.version_info
+    add("Python", py >= (3, 9), f"{py.major}.{py.minor}.{py.micro}")
+    add("Platform", True, f"{platform.system()} {platform.release()}")
+
+    # ── Binary visibility ───────────────────────────────────────────────────
+    pulse_bin = shutil.which("pulse")
+    add("pulse in PATH", bool(pulse_bin), pulse_bin or "not found")
+
+    openclaw_bin = shutil.which("openclaw")
+    add("openclaw in PATH", bool(openclaw_bin), openclaw_bin or "not found")
+
+    # If OpenClaw is installed, try a fast, read-only gateway status check.
+    if openclaw_bin:
+        import subprocess
+
+        try:
+            p = subprocess.run(
+                ["openclaw", "gateway", "status"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            out = (p.stdout or "").strip() or (p.stderr or "").strip()
+            # Don't over-parse; just show a short summary.
+            detail = out.splitlines()[0][:160] if out else f"exit={p.returncode}"
+            add("openclaw gateway", p.returncode == 0, detail)
+        except Exception as e:
+            add("openclaw gateway", False, str(e))
+
+    # ── Config detection / parse ────────────────────────────────────────────
+    runtime = _runtime_paths()
+    cfg_path = runtime["config_path"]
+    cfg_error = runtime["config_error"]
+
+    if not cfg_path:
+        add("Config", False, "pulse.yaml not found (run: pulse init)")
+    elif cfg_error:
+        add("Config", False, f"Failed to parse {cfg_path}: {cfg_error}")
+    else:
+        add("Config", True, str(cfg_path))
+
+    # ── Token presence ──────────────────────────────────────────────────────
+    env_file = Path("~/.pulse/.env").expanduser()
+    token_env = os.environ.get("PULSE_HOOK_TOKEN") or os.environ.get(
+        "OPENCLAW_HOOKS_TOKEN"
+    )
+    token_ok = bool(token_env) or env_file.exists()
+    token_detail = (
+        "env" if token_env else ("~/.pulse/.env" if env_file.exists() else "missing")
+    )
+    add("Webhook token", token_ok, token_detail)
+
+    # ── State/log dirs ──────────────────────────────────────────────────────
+    state_dir = runtime["state_dir"]
+    logs_dir = runtime["log_file"].parent
+    add("State dir", state_dir.exists(), str(state_dir))
+    add("State dir writable", state_dir.exists() and os.access(state_dir, os.W_OK), "")
+    add("Logs dir", logs_dir.exists(), str(logs_dir))
+    add("Logs dir writable", logs_dir.exists() and os.access(logs_dir, os.W_OK), "")
+
+    # ── LaunchAgent ─────────────────────────────────────────────────────────
+    add(
+        "LaunchAgent", PLIST.exists(), str(PLIST) if PLIST.exists() else "not installed"
+    )
+
+    # ── Daemon + localhost health ───────────────────────────────────────────
+    running, pid = _is_running()
+    add("Daemon", running, f"pid {pid}" if pid else "stopped")
+
+    # Port reachability (localhost only)
+    port = _port()
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            port_open = True
+    except Exception:
+        port_open = False
+
+    if running:
+        add("Health port", port_open, f"127.0.0.1:{port}")
+        health = _get("/health")
+        add("/health", bool(health), "ok" if health else "unreachable")
+        status = _get("/status")
+        add("/status", bool(status), "ok" if status else "unreachable")
+    else:
+        # If not running, port open would be surprising (another process?)
+        add(
+            "Health port",
+            not port_open,
+            f"127.0.0.1:{port}" + (" (in use?)" if port_open else ""),
+        )
+
+    # ── Print results ───────────────────────────────────────────────────────
+    ok_count = sum(1 for _, ok, _ in checks if ok)
+    total = len(checks)
+    title = "🩺 pulse doctor"
+    border = (
+        "green" if ok_count == total else "yellow" if ok_count >= total - 2 else "red"
+    )
+
+    console.print()
+    console.print(
+        Panel(
+            f"Checks passed: [bold]{ok_count}/{total}[/]\n"
+            "This command performs read-only diagnostics (localhost only).",
+            title=title,
+            border_style=border,
+        )
+    )
+
+    table = Table(box=box.SIMPLE_HEAVY, padding=(0, 1), show_edge=False)
+    table.add_column("Check", style="bold")
+    table.add_column("Status")
+    table.add_column("Detail", overflow="fold")
+
+    for name, ok, detail in checks:
+        status = "[green]✓[/]" if ok else "[red]✗[/]"
+        table.add_row(name, status, detail or "—")
+
+    console.print(table)
+    console.print()
+
+    if not cfg_path:
+        console.print(
+            "[dim]Tip: run [bold]pulse init[/] to generate config + LaunchAgent.[/]"
+        )
+        console.print()
+
+
+def cmd_feedback(args):
+    """Send turn feedback to Pulse to decay drive pressure."""
+    running, _ = _is_running()
+    if not running:
+        console.print("[red]Pulse is not running[/] — start it first: pulse start")
+        return
+
+    drives = args.drives or []
+    if not drives and args.outcome != "cascade_stop":
+        console.print(
+            "[red]Provide at least one drive name[/] (or use --outcome cascade_stop)"
+        )
+        return
+
+    payload = {
+        "drives_addressed": drives,
+        "outcome": args.outcome,
+        "summary": args.summary or "",
+    }
+
+    if args.decay_overrides:
+        try:
+            payload["decay_overrides"] = json.loads(args.decay_overrides)
+        except json.JSONDecodeError as e:
+            console.print(f"[red]Invalid JSON for --decay-overrides:[/] {e}")
+            return
+
+    data = _post("/feedback", payload)
+    if not data or data.get("status") != "ok":
+        console.print("[red]Failed to send feedback[/]")
+        return
+
+    updated = data.get("drives_updated", {}) or {}
+    console.print("\n📨 [bold magenta]Feedback accepted[/]\n")
+    if not updated:
+        console.print("  [dim]No drives updated (already at 0?)[/]")
+        return
+
+    table = Table(box=box.SIMPLE_HEAVY, padding=(0, 1))
+    table.add_column("Drive", style="bold")
+    table.add_column("Before", justify="right")
+    table.add_column("After", justify="right")
+    table.add_column("Decayed", justify="right")
+
+    for name, r in sorted(updated.items()):
+        table.add_row(
+            name,
+            f"{r.get('before', 0):.2f}",
+            f"{r.get('after', 0):.2f}",
+            f"{r.get('decayed', 0):.2f}",
+        )
+
+    console.print(table)
+
+
 # ─── Main ────────────────────────────────────────────────────────
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -1279,11 +1735,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--no-color", action="store_true", help="Disable colors")
-    
+
     sub = parser.add_subparsers(dest="command")
 
     # status (default)
-    sub.add_parser("init",   help="Interactive setup wizard — first-time configuration")
+    sub.add_parser("init", help="Interactive setup wizard — first-time configuration")
     sub.add_parser("status", help="Show status overview")
 
     # drives
@@ -1314,6 +1770,27 @@ def main():
     # config
     sub.add_parser("config", help="Show current configuration")
 
+    # doctor
+    sub.add_parser("doctor", help="Run diagnostic checks for common setup issues")
+
+    # feedback
+    p = sub.add_parser(
+        "feedback", help="Send feedback to Pulse (decays drive pressure)"
+    )
+    p.add_argument("--drives", "-d", nargs="*", default=[], help="Drive(s) addressed")
+    p.add_argument(
+        "--outcome",
+        choices=["success", "failure", "cascade_stop"],
+        default="success",
+        help="Outcome category",
+    )
+    p.add_argument("--summary", "-s", default="", help="Short summary of what you did")
+    p.add_argument(
+        "--decay-overrides",
+        default="",
+        help="Optional JSON map of drive->decay amount",
+    )
+
     # start/stop/restart
     sub.add_parser("start", help="Start the daemon")
     sub.add_parser("stop", help="Stop the daemon")
@@ -1327,26 +1804,42 @@ def main():
     sub.add_parser("health", help="Raw health/status/evolution endpoints")
 
     # genome — DNA export/import/diff
-    g_parser = sub.add_parser("genome", help="Export, import, or diff the Pulse genome (DNA config)")
+    g_parser = sub.add_parser(
+        "genome", help="Export, import, or diff the Pulse genome (DNA config)"
+    )
     g_sub = g_parser.add_subparsers(dest="genome_cmd")
     g_export = g_sub.add_parser("export", help="Export current genome to JSON")
-    g_export.add_argument("--output", "-o", metavar="FILE", help="Output file (default: stdout)")
+    g_export.add_argument(
+        "--output", "-o", metavar="FILE", help="Output file (default: stdout)"
+    )
     g_import = g_sub.add_parser("import", help="Import genome from a JSON file")
     g_import.add_argument("file", metavar="FILE", help="Path to genome JSON")
-    g_diff = g_sub.add_parser("diff", help="Compare current genome against a saved file")
-    g_diff.add_argument("file", metavar="FILE", help="Path to genome JSON to compare against")
+    g_diff = g_sub.add_parser(
+        "diff", help="Compare current genome against a saved file"
+    )
+    g_diff.add_argument(
+        "file", metavar="FILE", help="Path to genome JSON to compare against"
+    )
     g_sub.add_parser("show", help="Show current genome (default if no subcommand)")
 
     # plugin
     p_parser = sub.add_parser("plugin", help="Manage community plugins")
     p_sub = p_parser.add_subparsers(dest="plugin_cmd")
     p_sub.add_parser("list", help="List loaded plugins (default)")
-    p_discover = p_sub.add_parser("discover", help="Scan plugin dir and load new plugins")
-    p_discover.add_argument("--dir", metavar="DIR", help="Plugin directory to scan (default: ~/.pulse/plugins/)")
+    p_discover = p_sub.add_parser(
+        "discover", help="Scan plugin dir and load new plugins"
+    )
+    p_discover.add_argument(
+        "--dir",
+        metavar="DIR",
+        help="Plugin directory to scan (default: ~/.pulse/plugins/)",
+    )
     p_sub.add_parser("health", help="Show plugin health + error counts")
 
     # superego
-    se_parser = sub.add_parser("superego", help="Runtime identity enforcement — compliance tracking")
+    se_parser = sub.add_parser(
+        "superego", help="Runtime identity enforcement — compliance tracking"
+    )
     se_sub = se_parser.add_subparsers(dest="superego_cmd")
     se_sub.add_parser("status", help="Show compliance health (default)")
     se_scan = se_sub.add_parser("scan", help="Scan a text snippet for identity drift")
@@ -1364,7 +1857,7 @@ def main():
     cmd = args.command or "status"
 
     commands = {
-        "init":   cmd_init,
+        "init": cmd_init,
         "status": cmd_status,
         "drives": cmd_drives,
         "triggers": cmd_triggers,
@@ -1373,6 +1866,7 @@ def main():
         "spike": cmd_spike,
         "decay": cmd_decay,
         "config": cmd_config,
+        "doctor": cmd_doctor,
         "start": cmd_start,
         "stop": cmd_stop,
         "restart": cmd_restart,
@@ -1380,6 +1874,7 @@ def main():
         "health": cmd_health,
         "genome": cmd_genome,
         "plugin": cmd_plugin,
+        "feedback": cmd_feedback,
         "superego": cmd_superego,
         "help": cmd_help,
     }
