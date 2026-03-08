@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-03-08
+
+### Added
+- **Pulse Instincts System** — Drive-triggered autonomous skills that fire before GENERATE
+  - `instincts/` folder structure: each instinct is a self-contained folder with `INSTINCT.md` + scripts
+  - YAML frontmatter spec: `triggers.drives`, `triggers.context`, `cooldown_minutes`, `timeout_seconds`, `output` routing
+  - `src/instincts/` Python package: `models`, `loader`, `registry`, `executor`
+  - `InstinctRegistry`: loads all instincts from config, matches against live drive state
+  - `InstinctExecutor`: runs matched instinct scripts with cooldown tracking, routes output to Discord/Signal/log
+  - Instincts fire deterministically before GENERATE (reliable skill → creative fallback ordering)
+  - Cooldown protection per instinct — no runaway firing
+  - 3 initial instincts shipped:
+    - `weather-market-scan`: fires on `curiosity ≥ 3.0 + financial_urgency ≥ 2.0` during GFS windows → scans FLOOR/CEILING Polymarket opportunities
+    - `memory-maintenance`: fires on `growth ≥ 2.5` during off-hours → consolidates hippocampus, prunes old memory
+    - `x-engagement`: fires on `social ≥ 3.5` → drafts reply queue from X timeline
+  - `instincts` config section in `pulse.yaml`
+  - 39 new tests in `tests/unit/test_instincts/`
+  - Full spec in `INSTINCT_SPEC.md` (617 lines)
+- **Version bump: 0.4.0 → 0.5.0**
+
 ## [0.4.0] - 2026-03-08
 
 ### Added
