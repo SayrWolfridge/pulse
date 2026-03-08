@@ -41,7 +41,7 @@ def _default_state() -> dict:
         "total_scans": 0,
         "last_run": 0,
         "last_loop": 0,
-        "gaps": [],  # list[{id, topic, first_seen, last_seen, count, examples:[] }]
+        "gaps": [],  # list[{id, topic, first_seen, last_seen, count, examples:[], resolved?: {ts, reason} }]
         "history": [],  # last 20 scan summaries
     }
 
@@ -118,6 +118,61 @@ def _is_problem_entry(entry: dict) -> Tuple[bool, str, str]:
     return (True, topic, example)
 
 
+def resolve_gap(gap_id: str, reason: str = "") -> bool:
+    """Mark a known gap as resolved.
+
+    Once resolved, the gap is excluded from escalation and filtered from
+    top_gaps in get_status(). The historical record is preserved but tagged.
+
+    Args:
+        gap_id: The gap id to resolve (e.g. "nephron:filter_cycle").
+        reason: Human-readable explanation of how/why it was fixed.
+
+    Returns:
+        True if the gap was found and marked resolved, False otherwise.
+    """
+    state = _load_state()
+    gaps = state.get("gaps", [])
+    if not isinstance(gaps, list):
+        gaps = []
+
+    found = False
+    for g in gaps:
+        if not isinstance(g, dict):
+            continue
+        if g.get("id") == gap_id:
+            g["resolved"] = {
+                "ts": time.time(),
+                "reason": reason[:500] if reason else "resolved",
+            }
+            found = True
+
+            # Emit a resolution event to THALAMUS
+            try:
+                thalamus.append(
+                    {
+                        "source": "cortex_ext",
+                        "type": "learning_gap_resolved",
+                        "salience": 0.5,
+                        "data": {
+                            "topic": g.get("topic", gap_id),
+                            "gap_id": gap_id,
+                            "reason": reason[:280] if reason else "resolved",
+                            "count_at_resolve": g.get("count", 0),
+                        },
+                    }
+                )
+            except Exception:
+                pass
+            break
+
+    if found:
+        state["gaps"] = gaps
+        _save_state(state)
+
+    return found
+
+
 def run_scan(loop_count: Optional[int] = None, *, recent_n: int = 200) -> dict:
     """Scan recent THALAMUS entries and update learning gaps.
 
@@ -182,6 +237,10 @@ def run_scan(loop_count: Optional[int] = None, *, recent_n: int = 200) -> dict:
             g["count"] = int(g.get("count", 0)) + 1
             updated_gaps += 1
 
+            # Skip escalation for resolved gaps
+            if g.get("resolved"):
+                continue
+
             # Escalate if recurrent
             if g["count"] in (ESCALATION_COUNT, ESCALATION_COUNT * 2):
                 try:
@@ -243,9 +302,13 @@ def get_status() -> dict:
     gaps = state.get("gaps", [])
     if not isinstance(gaps, list):
         gaps = []
-    # Show top gaps by count
+
+    open_gaps = [g for g in gaps if isinstance(g, dict) and not g.get("resolved")]
+    resolved_gaps = [g for g in gaps if isinstance(g, dict) and g.get("resolved")]
+
+    # Show top open gaps by count
     top = sorted(
-        (g for g in gaps if isinstance(g, dict)),
+        open_gaps,
         key=lambda g: int(g.get("count", 0)),
         reverse=True,
     )[:10]
@@ -254,7 +317,8 @@ def get_status() -> dict:
         "total_scans": state.get("total_scans", 0),
         "last_run": state.get("last_run", 0),
         "last_loop": state.get("last_loop", 0),
-        "gap_count": len(gaps),
+        "gap_count": len(open_gaps),
+        "resolved_count": len(resolved_gaps),
         "top_gaps": [
             {
                 "id": g.get("id"),
@@ -323,7 +387,8 @@ def _run_tests():
 
     status = get_status()
     assert "gap_count" in status
-    print("  ✅ get_status")
+    assert "resolved_count" in status
+    print("  ✅ get_status includes resolved_count")
 
     print("All CORTEX_EXT tests passed! ✅")
 

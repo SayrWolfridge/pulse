@@ -119,3 +119,126 @@ class TestCortexExtScan:
         assert summary["new_gaps"] == 0
         assert summary["broadcasts"] == 0
         assert cortexext.get_status()["gap_count"] == 0
+
+
+class TestCortexExtResolve:
+    """Tests for the resolve_gap() mechanism."""
+
+    def test_resolve_unknown_gap_returns_false(self, tmp_path, monkeypatch):
+        _patch_state_paths(monkeypatch, tmp_path)
+        monkeypatch.setattr(cortexext.thalamus, "append", lambda e: e)
+        result = cortexext.resolve_gap("nonexistent:gap", reason="test")
+        assert result is False
+
+    def test_resolve_existing_gap_returns_true(self, tmp_path, monkeypatch):
+        _patch_state_paths(monkeypatch, tmp_path)
+
+        # Seed a gap via scan
+        entries = [
+            {
+                "ts": int(time.time() * 1000),
+                "source": "nephron",
+                "type": "filter_cycle",
+                "salience": 0.8,
+                "data": {"errors": ["AttributeError: list has no .get"]},
+            }
+        ]
+        monkeypatch.setattr(cortexext.thalamus, "read_recent", lambda n=200: entries)
+        appended = []
+        monkeypatch.setattr(
+            cortexext.thalamus, "append", lambda e: appended.append(e) or e
+        )
+
+        cortexext.run_scan(loop_count=cortexext.LOOP_INTERVAL, recent_n=10)
+
+        # Gap should exist and be open
+        status_before = cortexext.get_status()
+        assert status_before["gap_count"] == 1
+        assert status_before["resolved_count"] == 0
+
+        # Resolve it
+        gap_id = cortexext._gap_id("nephron:filter_cycle")
+        result = cortexext.resolve_gap(gap_id, reason="Fixed in commit 51000ec: handle list format")
+        assert result is True
+
+        # Verify gap_count drops and resolved_count rises
+        status_after = cortexext.get_status()
+        assert status_after["gap_count"] == 0
+        assert status_after["resolved_count"] == 1
+
+    def test_resolved_gap_not_escalated_on_rescan(self, tmp_path, monkeypatch):
+        _patch_state_paths(monkeypatch, tmp_path)
+
+        entries = [
+            {
+                "ts": int(time.time() * 1000),
+                "source": "nephron",
+                "type": "filter_cycle",
+                "salience": 0.8,
+                "data": {"errors": ["stale error"]},
+            }
+        ]
+        monkeypatch.setattr(cortexext.thalamus, "read_recent", lambda n=200: entries)
+        appended = []
+        monkeypatch.setattr(
+            cortexext.thalamus, "append", lambda e: appended.append(e) or e
+        )
+
+        # Run until escalation threshold
+        for i in range(cortexext.ESCALATION_COUNT + 1):
+            cortexext.run_scan(
+                loop_count=cortexext.LOOP_INTERVAL * (i + 1), recent_n=10
+            )
+
+        # Mark resolved
+        gap_id = cortexext._gap_id("nephron:filter_cycle")
+        cortexext.resolve_gap(gap_id, reason="bug fixed")
+        appended.clear()  # Reset broadcast capture
+
+        # Run more scans — resolved gap should not produce escalation broadcasts
+        for i in range(cortexext.ESCALATION_COUNT + 2):
+            cortexext.run_scan(
+                loop_count=cortexext.LOOP_INTERVAL * (cortexext.ESCALATION_COUNT + i + 2),
+                recent_n=10,
+            )
+
+        escalations = [e for e in appended if e.get("type") == "learning_gap_escalated"]
+        assert len(escalations) == 0, "Resolved gap should not produce escalation broadcasts"
+
+    def test_resolve_emits_thalamus_event(self, tmp_path, monkeypatch):
+        _patch_state_paths(monkeypatch, tmp_path)
+
+        # Seed a gap
+        entries = [
+            {
+                "ts": int(time.time() * 1000),
+                "source": "spine",
+                "type": "health",
+                "salience": 0.9,
+                "data": {"status": "red", "error": "disk full"},
+            }
+        ]
+        monkeypatch.setattr(cortexext.thalamus, "read_recent", lambda n=200: entries)
+        appended = []
+        monkeypatch.setattr(
+            cortexext.thalamus, "append", lambda e: appended.append(e) or e
+        )
+
+        cortexext.run_scan(loop_count=cortexext.LOOP_INTERVAL, recent_n=10)
+        appended.clear()
+
+        gap_id = cortexext._gap_id("spine:health:red")
+        cortexext.resolve_gap(gap_id, reason="disk expanded")
+
+        resolution_events = [e for e in appended if e.get("type") == "learning_gap_resolved"]
+        assert len(resolution_events) == 1
+        assert resolution_events[0]["data"]["gap_id"] == gap_id
+        assert "disk expanded" in resolution_events[0]["data"]["reason"]
+
+    def test_get_status_includes_resolved_count(self, tmp_path, monkeypatch):
+        _patch_state_paths(monkeypatch, tmp_path)
+        monkeypatch.setattr(cortexext.thalamus, "read_recent", lambda n=200: [])
+        monkeypatch.setattr(cortexext.thalamus, "append", lambda e: e)
+        status = cortexext.get_status()
+        assert "resolved_count" in status
+        assert isinstance(status["resolved_count"], int)
