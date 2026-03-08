@@ -227,36 +227,68 @@ def _prune_retina_learning() -> int:
 
 
 def _prune_engrams() -> int:
-    """Prune low-importance old ENGRAM memories."""
+    """Prune low-importance old ENGRAM memories.
+
+    engram-store.json is a raw list of memory dicts (not wrapped in a dict).
+    Each entry has: id, event, emotion{valence,intensity,label}, location,
+    timestamp (epoch_ms), sensory, associations, recall_count, last_recalled.
+    There is no top-level 'importance' field — we use emotion.intensity as proxy.
+    """
     engram_file = _DEFAULT_STATE_DIR / "engram-store.json"
     if not engram_file.exists():
         return 0
 
     try:
         data = json.loads(engram_file.read_text())
-        memories = data.get("memories", [])
+        # Handle both raw list and legacy dict-wrapped formats
+        if isinstance(data, dict):
+            memories = data.get("memories", [])
+        elif isinstance(data, list):
+            memories = data
+        else:
+            return 0
+
         if not memories:
             return 0
 
-        cutoff = time.time() - (ENGRAM_MAX_AGE_DAYS * 86400)
+        # cutoff_ms: engram timestamps are in epoch milliseconds
+        cutoff_ms = (time.time() - (ENGRAM_MAX_AGE_DAYS * 86400)) * 1000
         kept = []
         pruned = 0
 
         for mem in memories:
-            importance = mem.get("importance", 5)
-            ts = mem.get("ts", time.time())
+            if not isinstance(mem, dict):
+                kept.append(mem)
+                continue
 
-            # Keep if: high importance OR recent
-            if importance >= ENGRAM_MIN_IMPORTANCE or ts >= cutoff:
+            # Importance: explicit field or emotion.intensity (0.0–1.0 or 0–10 scale)
+            importance = mem.get("importance", None)
+            if importance is None:
+                emotion = mem.get("emotion", {})
+                importance = emotion.get("intensity", 0.5) if isinstance(emotion, dict) else 0.5
+            # Normalize 0–10 scale to 0–1
+            if isinstance(importance, (int, float)) and importance > 1.0:
+                importance = min(importance / 10.0, 1.0)
+
+            # timestamp field (epoch_ms); fall back to 'ts' in seconds
+            ts_ms = mem.get("timestamp")
+            if ts_ms is None:
+                ts_ms = mem.get("ts", time.time() * 1000)
+                # if ts looks like epoch seconds, convert
+                if ts_ms < 1e12:
+                    ts_ms *= 1000
+
+            # Keep if: high importance OR recently created
+            if importance >= ENGRAM_MIN_IMPORTANCE / 10.0 or ts_ms >= cutoff_ms:
                 kept.append(mem)
             else:
                 pruned += 1
 
         if pruned > 0:
-            data["memories"] = kept
-            engram_file.write_text(json.dumps(data, indent=2))
+            # Always write back as raw list (matching engram.py's format)
+            engram_file.write_text(json.dumps(kept, indent=2))
         return pruned
-    except (json.JSONDecodeError, KeyError):
+    except (json.JSONDecodeError, KeyError, AttributeError, TypeError):
         return 0
 
 

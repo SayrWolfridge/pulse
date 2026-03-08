@@ -97,6 +97,59 @@ class TestNephronBasics:
         finally:
             endo_file.write_text(original)
 
+    def test_engram_list_format(self):
+        """_prune_engrams handles raw list format (not dict-wrapped)."""
+        engram_file = nephron._DEFAULT_STATE_DIR / "engram-store.json"
+        original = engram_file.read_text() if engram_file.exists() else None
+        now_ms = time.time() * 1000
+        old_ms = (time.time() - 200 * 86400) * 1000  # 200 days ago → should prune
+
+        test_memories = [
+            # Recent high-emotion → keep
+            {
+                "id": "keep-001",
+                "event": "recent event",
+                "emotion": {"valence": 0.5, "intensity": 0.8, "label": "joy"},
+                "location": "test",
+                "timestamp": now_ms,
+                "sensory": {},
+                "associations": [],
+                "recall_count": 0,
+                "last_recalled": None,
+            },
+            # Old low-emotion → prune
+            {
+                "id": "prune-001",
+                "event": "old boring event",
+                "emotion": {"valence": 0.0, "intensity": 0.05, "label": "neutral"},
+                "location": "test",
+                "timestamp": old_ms,
+                "sensory": {},
+                "associations": [],
+                "recall_count": 0,
+                "last_recalled": None,
+            },
+        ]
+        try:
+            engram_file.write_text(json.dumps(test_memories, indent=2))
+            pruned = nephron._prune_engrams()
+            assert pruned == 1, f"Expected 1 pruned, got {pruned}"
+            remaining = json.loads(engram_file.read_text())
+            assert isinstance(remaining, list), "Output must remain a list"
+            assert len(remaining) == 1
+            assert remaining[0]["id"] == "keep-001"
+        finally:
+            if original is not None:
+                engram_file.write_text(original)
+            elif engram_file.exists():
+                engram_file.unlink()
+
+    def test_engram_no_attributeerror_on_list(self):
+        """filter_all() must not produce errors from engram list format."""
+        results = nephron.filter_all()
+        engram_errors = [e for e in results.get("errors", []) if "engram" in e.lower()]
+        assert engram_errors == [], f"Unexpected engram errors: {engram_errors}"
+
     def test_chronicle_no_recent_pruning(self):
         """Recent chronicle entries should not be pruned."""
         chronicle_file = nephron._DEFAULT_STATE_DIR / "chronicle.jsonl"
