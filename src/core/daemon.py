@@ -84,7 +84,7 @@ class PulseDaemon:
         self.running = False
         self.start_time: Optional[float] = None
         self.turn_count = 0
-        self.last_trigger_time = 0.0
+        self.last_trigger_time = time.time()  # init to now so idle=0 on first check
         self._turn_timestamps: list = []  # sliding window for rate limiting
         self._pid_fd = None  # file descriptor for PID lock
         self._last_generate_time: float = 0.0  # track GENERATE step timing
