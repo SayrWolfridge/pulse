@@ -80,6 +80,18 @@ class SensorManager:
                     "Web sensor enabled but no feeds configured — "
                     "add sensors.web.feeds in pulse.yaml"
                 )
+        # Phase 3: Calendar sensor (Apple Calendar / ICS)
+        if getattr(config.sensors, "calendar", None) and config.sensors.calendar.enabled:
+            backend = config.sensors.calendar.backend
+            has_ics = bool(getattr(config.sensors.calendar, "ics_paths", []))
+            if backend in ("auto", "macos") or (backend == "ics" and has_ics):
+                from pulse.src.sensors.calendar_sensor import CalendarSensor
+                self.sensors.append(CalendarSensor(config))
+            else:
+                logger.warning(
+                    "Calendar sensor enabled but no ICS paths configured and backend='ics' — "
+                    "add sensors.calendar.ics_paths or set backend='auto'/'macos' in pulse.yaml"
+                )
 
     async def start(self):
         """Initialize all sensors."""

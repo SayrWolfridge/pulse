@@ -126,12 +126,24 @@ class WebSensorConfig:
 
 
 @dataclass
+class CalendarSensorConfig:
+    enabled: bool = False
+    backend: str = "auto"                    # "auto" | "macos" | "ics"
+    ics_paths: List[str] = field(default_factory=list)   # paths to .ics files
+    lookahead_minutes: int = 120             # scan window (events starting within)
+    imminent_threshold_minutes: int = 30     # stronger spike when event this close
+    check_interval_minutes: int = 5          # minimum gap between scans
+    request_timeout: int = 5                 # osascript timeout (seconds)
+
+
+@dataclass
 class SensorsConfig:
     filesystem: FilesystemSensorConfig = field(default_factory=FilesystemSensorConfig)
     discord: DiscordSensorConfig = field(default_factory=DiscordSensorConfig)
     twitter: TwitterSensorConfig = field(default_factory=TwitterSensorConfig)
     git: GitSensorConfig = field(default_factory=GitSensorConfig)
     web: WebSensorConfig = field(default_factory=WebSensorConfig)
+    calendar: CalendarSensorConfig = field(default_factory=CalendarSensorConfig)
     system: SystemSensorConfig = field(default_factory=SystemSensorConfig)
 
 
@@ -382,6 +394,7 @@ class PulseConfig:
             tw = s.get("twitter", {})
             gt = s.get("git", {})
             wb = s.get("web", {})
+            cal = s.get("calendar", {})
             config.sensors = SensorsConfig(
                 filesystem=FilesystemSensorConfig(
                     enabled=fs.get("enabled", config.sensors.filesystem.enabled),
@@ -460,6 +473,25 @@ class PulseConfig:
                     ),
                     request_timeout=wb.get(
                         "request_timeout", config.sensors.web.request_timeout
+                    ),
+                ),
+                calendar=CalendarSensorConfig(
+                    enabled=cal.get("enabled", config.sensors.calendar.enabled),
+                    backend=cal.get("backend", config.sensors.calendar.backend),
+                    ics_paths=cal.get("ics_paths", config.sensors.calendar.ics_paths),
+                    lookahead_minutes=cal.get(
+                        "lookahead_minutes", config.sensors.calendar.lookahead_minutes
+                    ),
+                    imminent_threshold_minutes=cal.get(
+                        "imminent_threshold_minutes",
+                        config.sensors.calendar.imminent_threshold_minutes,
+                    ),
+                    check_interval_minutes=cal.get(
+                        "check_interval_minutes",
+                        config.sensors.calendar.check_interval_minutes,
+                    ),
+                    request_timeout=cal.get(
+                        "request_timeout", config.sensors.calendar.request_timeout
                     ),
                 ),
                 system=SystemSensorConfig(

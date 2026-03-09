@@ -162,6 +162,17 @@ class DriveEngine:
             if "curiosity" in self.drives:
                 self.drives["curiosity"].spike(0.15, self.config.drives.max_pressure)
 
+        # Calendar: upcoming events → unfinished drive (awareness / urgency)
+        cal_data = sensor_data.get("calendar", {})
+        if cal_data.get("imminent_event"):
+            # Event starting very soon — stronger spike
+            if "unfinished" in self.drives:
+                self.drives["unfinished"].spike(0.2, self.config.drives.max_pressure)
+        elif cal_data.get("events_soon"):
+            # Events approaching but not imminent — soft awareness spike
+            if "unfinished" in self.drives:
+                self.drives["unfinished"].spike(0.1, self.config.drives.max_pressure)
+
         # System health issues → spike system drive (max once per min_trigger_interval)
         system_alerts = sensor_data.get("system", {}).get("alerts", [])
         if system_alerts:
