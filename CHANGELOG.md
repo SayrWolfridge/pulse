@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-03-09
+
+### Added
+- **Dashboard Learner Card — Phase 4** (`src/observation_server.py`, `src/dashboard.html`)
+  - `_get_learner_data()` helper: reads `feedback_learner.json`, computes per-drive EMA, multiplier [0.7–1.3], success rate, event count, last outcome
+  - `GET /state/learner` endpoint — new auth-gated route alongside existing state subsystems (`/state/drives`, `/state/modules`, `/state/instincts`)
+  - WebSocket `/stream` now includes `learner` in every 5-second real-time broadcast
+  - Dashboard card: **Feedback Learner — Drive Reinforcement**
+    - Per-drive bar scaled across the full [0.7, 1.3] multiplier range
+    - Color-coded: green = reinforced (>1.05), red = suppressed (<0.95), purple = neutral
+    - Shows +N% / -N% multiplier delta, success rate %, outcome dot per drive
+    - Fetches `/state/learner` on load + every 15s; receives live updates via WebSocket
+  - Closes the observability loop: the RL-lite learner introduced in v0.5.2 was invisible until now — drives that succeed or fail can be watched adapting in real time
+- **Test suite: 1132 → 1152 tests** (20 new)
+  - `TestStateLearner` (16 tests): endpoint auth, response schema, per-drive fields, empty-state handling
+  - `TestDashboardLearner` (4 tests): card render, color logic, WebSocket payload inclusion
+
 ## [0.5.2] - 2026-03-09
 
 ### Added
