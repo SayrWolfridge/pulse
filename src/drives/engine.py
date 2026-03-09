@@ -157,6 +157,11 @@ class DriveEngine:
             if "growth" in self.drives:
                 self.drives["growth"].spike(0.1, self.config.drives.max_pressure)
 
+        # Web: new RSS/Atom content found → curiosity drive
+        if sensor_data.get("web", {}).get("new_content"):
+            if "curiosity" in self.drives:
+                self.drives["curiosity"].spike(0.15, self.config.drives.max_pressure)
+
         # System health issues → spike system drive (max once per min_trigger_interval)
         system_alerts = sensor_data.get("system", {}).get("alerts", [])
         if system_alerts:

@@ -117,11 +117,21 @@ class GitSensorConfig:
 
 
 @dataclass
+class WebSensorConfig:
+    enabled: bool = False
+    feeds: List[str] = field(default_factory=list)   # RSS/Atom feed URLs to monitor
+    check_interval_minutes: int = 30   # minimum gap between polls per feed
+    max_items_per_feed: int = 20       # cap items inspected per cycle
+    request_timeout: int = 10          # HTTP timeout per feed (seconds)
+
+
+@dataclass
 class SensorsConfig:
     filesystem: FilesystemSensorConfig = field(default_factory=FilesystemSensorConfig)
     discord: DiscordSensorConfig = field(default_factory=DiscordSensorConfig)
     twitter: TwitterSensorConfig = field(default_factory=TwitterSensorConfig)
     git: GitSensorConfig = field(default_factory=GitSensorConfig)
+    web: WebSensorConfig = field(default_factory=WebSensorConfig)
     system: SystemSensorConfig = field(default_factory=SystemSensorConfig)
 
 
@@ -371,6 +381,7 @@ class PulseConfig:
             dc = s.get("discord", {})
             tw = s.get("twitter", {})
             gt = s.get("git", {})
+            wb = s.get("web", {})
             config.sensors = SensorsConfig(
                 filesystem=FilesystemSensorConfig(
                     enabled=fs.get("enabled", config.sensors.filesystem.enabled),
@@ -435,6 +446,20 @@ class PulseConfig:
                     ),
                     request_timeout=gt.get(
                         "request_timeout", config.sensors.git.request_timeout
+                    ),
+                ),
+                web=WebSensorConfig(
+                    enabled=wb.get("enabled", config.sensors.web.enabled),
+                    feeds=wb.get("feeds", config.sensors.web.feeds),
+                    check_interval_minutes=wb.get(
+                        "check_interval_minutes",
+                        config.sensors.web.check_interval_minutes,
+                    ),
+                    max_items_per_feed=wb.get(
+                        "max_items_per_feed", config.sensors.web.max_items_per_feed
+                    ),
+                    request_timeout=wb.get(
+                        "request_timeout", config.sensors.web.request_timeout
                     ),
                 ),
                 system=SystemSensorConfig(

@@ -70,7 +70,16 @@ class SensorManager:
                     "Git sensor enabled but no repos configured — "
                     "add sensors.git.repos in pulse.yaml"
                 )
-        # Web sensors are Phase 4+
+        # Phase 3: Web sensor (RSS/Atom feed monitoring)
+        if getattr(config.sensors, "web", None) and config.sensors.web.enabled:
+            if config.sensors.web.feeds:
+                from pulse.src.sensors.web_sensor import WebSensor
+                self.sensors.append(WebSensor(config))
+            else:
+                logger.warning(
+                    "Web sensor enabled but no feeds configured — "
+                    "add sensors.web.feeds in pulse.yaml"
+                )
 
     async def start(self):
         """Initialize all sensors."""
