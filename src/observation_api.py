@@ -239,6 +239,39 @@ def _get_soma_data() -> dict:
     }
 
 
+def _get_learner_data() -> dict:
+    """Read RL-lite feedback learner state from persisted JSON."""
+    raw = _read_json("feedback_learner.json", {})
+    drives_raw = raw.get("drives", {})
+    ema_map = raw.get("ema", {})
+
+    # Reconstruct per-drive stats from stored history + EMA
+    drives_stats: dict = {}
+    total_events = 0
+    for name, history in drives_raw.items():
+        if not isinstance(history, list):
+            continue
+        total_events += len(history)
+        successes = sum(1 for ev in history if ev.get("outcome") in ("success", "partial"))
+        success_rate = successes / len(history) if history else 0.0
+        ema_val = ema_map.get(name, 0.0)
+        # Multiplier mirrors FeedbackLearner.get_weight_adjustment: clamp [0.7, 1.3]
+        multiplier = max(0.7, min(1.3, 1.0 + ema_val * 0.3))
+        drives_stats[name] = {
+            "ema": round(ema_val, 4),
+            "multiplier": round(multiplier, 4),
+            "events": len(history),
+            "success_rate": round(success_rate, 4),
+            "last_outcome": history[-1].get("outcome") if history else None,
+        }
+
+    return {
+        "drives": drives_stats,
+        "total_events": total_events,
+        "timestamp": time.time(),
+    }
+
+
 @app.get("/state/drives")
 def get_drives(_: None = Depends(require_auth)):
     return _get_drives_data()
@@ -262,6 +295,12 @@ def get_circadian(_: None = Depends(require_auth)):
 @app.get("/state/soma")
 def get_soma(_: None = Depends(require_auth)):
     return _get_soma_data()
+
+
+@app.get("/state/learner")
+def get_learner(_: None = Depends(require_auth)):
+    """RL-lite feedback learner stats — per-drive EMA, weight multiplier, success rate."""
+    return _get_learner_data()
 
 
 # ── Chronicle ─────────────────────────────────────────────────────────────────
@@ -323,6 +362,7 @@ async def websocket_stream(ws: WebSocket):
                 "emotional": _get_emotional_data(),
                 "endocrine": _get_endocrine_data(),
                 "circadian": _get_circadian_data(),
+                "learner": _get_learner_data(),
                 "timestamp": time.time(),
             }
             await ws.send_json(state)
@@ -365,6 +405,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .ts { color: #444466; margin-right: 0.4rem; }
   .updated { font-size: 0.72rem; color: #444466; margin-top: 0.5rem; }
   #status-bar { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.5rem; font-size: 0.85rem; }
+  .learner-row { display: flex; align-items: center; justify-content: space-between; padding: 0.35rem 0; border-bottom: 1px solid var(--border); font-size: 0.8rem; }
+  .learner-row:last-child { border-bottom: none; }
+  .learner-drive { color: var(--dim); width: 90px; }
+  .learner-multi { width: 44px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .learner-rate { width: 40px; text-align: right; color: var(--dim); font-size: 0.75rem; }
+  .learner-bar { flex: 1; height: 4px; background: var(--border); border-radius: 2px; margin: 0 0.5rem; overflow: hidden; }
+  .learner-fill { height: 100%; border-radius: 2px; transition: width 0.4s ease; }
+  .outcome-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin-left: 0.4rem; flex-shrink: 0; }
 </style>
 </head>
 <body>
@@ -394,6 +442,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="card-title">Circadian + Soma</div>
     <div id="circadian-content"></div>
   </div>
+</div>
+<div class="card" style="margin-bottom:1rem" id="learner-card">
+  <div class="card-title">Feedback Learner — Drive Reinforcement</div>
+  <div id="learner-content"><span style="color:#444466">Loading...</span></div>
+  <div class="updated" id="learner-ts"></div>
 </div>
 <div class="card" style="margin-bottom:1rem">
   <div class="card-title">Chronicle — Recent Events</div>
@@ -451,6 +504,35 @@ function renderCircadian(data, soma) {
     <div style="font-size:0.78rem;color:#6666a0;margin-top:0.5rem">Phase: ${data.sleep_phase || '—'}${data.is_resting ? ' (resting)' : ''}</div>`;
 }
 
+function renderLearner(data) {
+  const drives = data.drives || {};
+  const total = data.total_events || 0;
+  if (!Object.keys(drives).length) {
+    document.getElementById('learner-content').innerHTML = '<span style="color:#444466">No learning data yet</span>';
+    return;
+  }
+  // Sort by absolute distance from 1.0 (most-affected drives first)
+  const sorted = Object.entries(drives).sort(([,a],[,b]) => Math.abs(b.multiplier - 1.0) - Math.abs(a.multiplier - 1.0));
+  const outcomeColor = { success: '#3fb950', partial: '#ffcc55', blocked: '#444466', failure: '#f85149', null: '#333355' };
+  const html = sorted.map(([name, s]) => {
+    const multi = s.multiplier || 1.0;
+    // Bar: 0.7→1.3 range. 1.0 = 50%. Each 0.1 = ~16.7%
+    const pct = ((multi - 0.7) / 0.6) * 100;
+    const barColor = multi > 1.05 ? '#3fb950' : multi < 0.95 ? '#f85149' : '#9d7cd8';
+    const dotColor = outcomeColor[s.last_outcome] || '#333355';
+    const multiDisplay = multi > 1.0 ? '+' + ((multi - 1) * 100).toFixed(0) + '%' : multi < 1.0 ? ((multi - 1) * 100).toFixed(0) + '%' : '±0%';
+    return `<div class="learner-row">
+      <span class="learner-drive">${name.replace(/_/g,' ')}</span>
+      <div class="learner-bar"><div class="learner-fill" style="width:${pct.toFixed(1)}%;background:${barColor}"></div></div>
+      <span class="learner-multi" style="color:${barColor}">${multiDisplay}</span>
+      <span class="learner-rate">${(s.success_rate * 100).toFixed(0)}%</span>
+      <span class="outcome-dot" style="background:${dotColor}" title="last: ${s.last_outcome || 'none'}"></span>
+    </div>`;
+  }).join('');
+  document.getElementById('learner-content').innerHTML = html;
+  document.getElementById('learner-ts').textContent = `${total} feedback events total · dot = last outcome`;
+}
+
 function renderChronicle(events) {
   const html = (events || []).slice(0, 15).map(e => {
     const ts = e.timestamp ? new Date(e.timestamp * 1000).toLocaleTimeString() : '';
@@ -480,13 +562,23 @@ function connect() {
       if (d.endocrine) renderEndocrine(d.endocrine);
       if (d.emotional) renderEmotional(d.emotional);
       if (d.circadian || d.soma) renderCircadian(d.circadian || {}, d.soma || {});
+      if (d.learner)   renderLearner(d.learner);
     } catch(_) {}
   };
 }
 
+async function fetchLearner() {
+  try {
+    const r = await fetch(`${BASE}/state/learner`, { headers: TOKEN ? {Authorization:'Bearer '+TOKEN} : {} });
+    if (r.ok) { const d = await r.json(); renderLearner(d); }
+  } catch(_) {}
+}
+
 connect();
 fetchChronicle();
+fetchLearner();
 setInterval(fetchChronicle, 10000);
+setInterval(fetchLearner, 15000);
 </script>
 </body>
 </html>"""

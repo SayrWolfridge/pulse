@@ -102,6 +102,33 @@ def state_dir(tmp_path):
             }
         )
     )
+    # feedback_learner.json — RL-lite learner state
+    now = time.time()
+    (tmp_path / "feedback_learner.json").write_text(
+        json.dumps(
+            {
+                "drives": {
+                    "curiosity": [
+                        {"outcome": "success", "ts": now - 120},
+                        {"outcome": "success", "ts": now - 60},
+                        {"outcome": "partial", "ts": now - 10},
+                    ],
+                    "goals": [
+                        {"outcome": "success", "ts": now - 200},
+                        {"outcome": "failure", "ts": now - 100},
+                    ],
+                    "growth": [
+                        {"outcome": "success", "ts": now - 300},
+                    ],
+                },
+                "ema": {
+                    "curiosity": 0.45,
+                    "goals": -0.10,
+                    "growth": 0.30,
+                },
+            }
+        )
+    )
     return tmp_path
 
 
@@ -402,6 +429,125 @@ class TestEngramSearch:
     def test_search_missing_q(self, client):
         r = client.get("/engram/search")
         assert r.status_code == 422  # FastAPI validation error
+
+
+# ── /state/learner ────────────────────────────────────────────────────────────
+
+
+class TestStateLearner:
+    def test_learner_ok(self, client):
+        r = client.get("/state/learner")
+        assert r.status_code == 200
+
+    def test_learner_has_drives(self, client):
+        data = client.get("/state/learner").json()
+        assert "drives" in data
+        assert isinstance(data["drives"], dict)
+
+    def test_learner_known_drives_present(self, client):
+        data = client.get("/state/learner").json()
+        assert "curiosity" in data["drives"]
+        assert "goals" in data["drives"]
+        assert "growth" in data["drives"]
+
+    def test_learner_drive_schema(self, client):
+        data = client.get("/state/learner").json()
+        d = data["drives"]["curiosity"]
+        assert "ema" in d
+        assert "multiplier" in d
+        assert "events" in d
+        assert "success_rate" in d
+        assert "last_outcome" in d
+
+    def test_learner_ema_value(self, client):
+        data = client.get("/state/learner").json()
+        # curiosity EMA fixture is 0.45
+        assert abs(data["drives"]["curiosity"]["ema"] - 0.45) < 0.01
+
+    def test_learner_multiplier_range(self, client):
+        data = client.get("/state/learner").json()
+        for name, stats in data["drives"].items():
+            assert 0.7 <= stats["multiplier"] <= 1.3, f"{name} multiplier out of range"
+
+    def test_learner_success_rate_range(self, client):
+        data = client.get("/state/learner").json()
+        for name, stats in data["drives"].items():
+            assert 0.0 <= stats["success_rate"] <= 1.0, f"{name} rate out of range"
+
+    def test_learner_curiosity_success_rate(self, client):
+        data = client.get("/state/learner").json()
+        # 2 success + 1 partial = 3/3 successes (partial counts) → 100%
+        assert data["drives"]["curiosity"]["success_rate"] == 1.0
+
+    def test_learner_goals_mixed_rate(self, client):
+        data = client.get("/state/learner").json()
+        # 1 success + 1 failure = 1/2 → 50%
+        assert abs(data["drives"]["goals"]["success_rate"] - 0.5) < 0.01
+
+    def test_learner_event_counts(self, client):
+        data = client.get("/state/learner").json()
+        assert data["drives"]["curiosity"]["events"] == 3
+        assert data["drives"]["goals"]["events"] == 2
+        assert data["drives"]["growth"]["events"] == 1
+
+    def test_learner_total_events(self, client):
+        data = client.get("/state/learner").json()
+        assert data["total_events"] == 6  # 3 + 2 + 1
+
+    def test_learner_last_outcome(self, client):
+        data = client.get("/state/learner").json()
+        assert data["drives"]["curiosity"]["last_outcome"] == "partial"
+        assert data["drives"]["goals"]["last_outcome"] == "failure"
+
+    def test_learner_reinforced_drive(self, client):
+        data = client.get("/state/learner").json()
+        # curiosity EMA=0.45 → multiplier > 1.0 (reinforced)
+        assert data["drives"]["curiosity"]["multiplier"] > 1.0
+
+    def test_learner_suppressed_drive(self, client):
+        data = client.get("/state/learner").json()
+        # goals EMA=-0.10 → multiplier < 1.0 (suppressed)
+        assert data["drives"]["goals"]["multiplier"] < 1.0
+
+    def test_learner_timestamp(self, client):
+        data = client.get("/state/learner").json()
+        assert "timestamp" in data
+        assert data["timestamp"] > 0
+
+    def test_learner_empty_state_dir(self, tmp_path, monkeypatch):
+        """Missing feedback_learner.json → empty but valid response."""
+        monkeypatch.setenv("PULSE_STATE_DIR", str(tmp_path))
+        monkeypatch.setenv("PULSE_OBS_TOKEN", "")
+        import importlib
+        import pulse.src.observation_api as obs_mod
+        importlib.reload(obs_mod)
+        c = TestClient(obs_mod.app)
+        r = c.get("/state/learner")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["drives"] == {}
+        assert data["total_events"] == 0
+
+
+# ── Dashboard — learner card ──────────────────────────────────────────────────
+
+
+class TestDashboardLearner:
+    def test_dashboard_has_learner_card(self, client):
+        r = client.get("/dashboard")
+        assert "Feedback Learner" in r.text
+
+    def test_dashboard_has_learner_content_div(self, client):
+        r = client.get("/dashboard")
+        assert "learner-content" in r.text
+
+    def test_dashboard_has_render_learner_fn(self, client):
+        r = client.get("/dashboard")
+        assert "renderLearner" in r.text
+
+    def test_dashboard_fetches_state_learner(self, client):
+        r = client.get("/dashboard")
+        assert "/state/learner" in r.text
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
