@@ -79,35 +79,70 @@ sensors:
     # Only trigger on external changes (not our own writes)
     ignore_self_writes: true
 
-  # Discord agent channels
+  # Discord — silence detection in agent channels
+  # Spikes: social drive
   discord:
     enabled: false
     channels: []
-    # Alert if agent silent for N minutes
-    silence_threshold_minutes: 180
+    # Alert if channel silent for N minutes (spike social drive)
+    silence_threshold_minutes: 60
+    request_timeout: 10
 
-  # Web monitors
+  # X / Twitter — @mention silence detection
+  # Spikes: social drive
+  twitter:
+    enabled: false
+    username: ""                          # your X handle without @
+    silence_threshold_minutes: 360        # 6 hours — X moves slower than Discord
+    bearer_token_env: "TWITTER_BEARER_TOKEN"  # env var holding Twitter API v2 Bearer Token
+    max_results: 10
+    request_timeout: 15
+
+  # Git — uncommitted work, untracked files, stale pushes
+  # Spikes: goals drive (uncommitted/stale), growth drive (commits behind)
+  git:
+    enabled: false
+    repos: []
+    # Example:
+    # repos:
+    #   - "~/.openclaw/workspace"
+    #   - "~/.openclaw/workspace/pulse"
+    stale_push_minutes: 120    # spike goals if last push > 2 hrs ago AND changes exist
+    fetch_remote: false        # set true to detect commits_behind (adds latency)
+    request_timeout: 10
+
+  # Web (RSS / Atom feeds) — new content detection
+  # Spikes: curiosity drive
   web:
     enabled: false
-    monitors: []
+    feeds: []
     # Example:
-    # - name: "Polymarket API"
-    #   url: "https://clob.polymarket.com/health"
-    #   interval_seconds: 300
-    #   alert_on: "status_change"
+    # feeds:
+    #   - "https://hnrss.org/frontpage"
+    #   - "https://openai.com/blog/rss"
+    check_interval_minutes: 30    # minimum gap between polls per feed
+    max_items_per_feed: 20        # cap new items counted per check
+    request_timeout: 15
+
+  # Calendar — upcoming event awareness
+  # Spikes: unfinished drive (stronger when event is imminent)
+  calendar:
+    enabled: false
+    backend: "auto"             # "auto" | "macos" | "ics"
+    ics_paths: []               # paths to .ics files (for "ics" backend or "auto" fallback)
+    lookahead_minutes: 120      # look ahead 2 hours for events
+    imminent_threshold_minutes: 30  # events within 30 min = imminent
+    check_interval_minutes: 5
+    request_timeout: 5
 
   # System health
   system:
     enabled: true
-    # Monitor memory pressure
-    memory_threshold_percent: 85
-    # Monitor process health (e.g., weather bot)
-    watch_processes: []
-
-  # Git activity
-  git:
-    enabled: false
-    repos: []
+    check_interval_seconds: 60
+    # Warn if Pulse daemon uses > N MB
+    memory_threshold_mb: 100
+    # Warn if < N GB free disk
+    disk_threshold_gb: 5
 
 # Priority evaluator
 evaluator:

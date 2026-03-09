@@ -113,6 +113,17 @@ drives:
 
 ### Sensors
 
+Pulse ships **eight sensors** organized into two tiers:
+
+| Tier | Sensors | Purpose |
+|------|---------|---------|
+| **Core** (always available) | `filesystem`, `conversation`, `system` | Workspace activity, human presence, daemon health |
+| **Phase 3** (optional integrations) | `discord`, `twitter`, `git`, `web`, `calendar` | External signals — silence, mentions, code state, RSS, schedule |
+
+---
+
+#### Core Sensors
+
 ```yaml
 sensors:
   filesystem:
@@ -139,12 +150,6 @@ sensors:
     check_interval_seconds: 60   # how often to check memory/disk
     memory_threshold_mb: 100     # warn if daemon uses > 100 MB
     disk_threshold_gb: 5         # warn if < 5 GB free
-  
-  discord:
-    enabled: false
-    channels:
-      - "1234567890"             # Discord channel IDs to monitor
-    silence_threshold_minutes: 60  # spike social drive if no messages in 1hr
 ```
 
 **Filesystem sensor:**
@@ -155,17 +160,144 @@ sensors:
 
 **Conversation sensor:**
 - Monitors OpenClaw session file size + mtime
-- Suppresses triggers when human is actively chatting
+- **Suppresses triggers** when human is actively chatting (no interruptions during conversations)
 - Only processes large files (avoids reading 5 MB logs every 30s)
 
 **System sensor:**
-- Monitors Pulse daemon's own health
-- Warns if memory leak or disk full
+- Monitors Pulse daemon's own health (memory usage, free disk)
+- Warns if daemon is leaking memory or disk is nearly full
+- Drives addressed: `system`
 
-**Discord sensor (future):**
-- Not yet implemented
-- Config is parsed but ignored
-- Will spike `social` drive when channels go silent
+---
+
+#### Phase 3 Sensors
+
+All Phase 3 sensors are **disabled by default** — enable only the ones you've configured credentials for.
+
+##### Discord Sensor
+
+Detects silence in monitored channels and spikes the `social` drive.
+
+```yaml
+sensors:
+  discord:
+    enabled: false
+    channels:
+      - "1234567890"               # Discord channel IDs to monitor
+    silence_threshold_minutes: 60  # spike social drive after 60 min of silence
+    request_timeout: 10            # API call timeout (seconds)
+```
+
+- **Drive wiring:** channel silence → `social.spike(0.15)`
+- **Requires:** Discord bot token in `DISCORD_BOT_TOKEN` env var (or OpenClaw's bot credentials)
+- **Use case:** Agent notices when a channel has gone quiet and proactively checks in
+
+##### X / Twitter Sensor
+
+Polls Twitter API v2 for `@mention` silence — spikes `social` drive if no mentions for a configurable window.
+
+```yaml
+sensors:
+  twitter:
+    enabled: false
+    username: "iamIrisAI"          # your X handle (without @)
+    silence_threshold_minutes: 360 # 6 hours — X moves slower than Discord
+    bearer_token: "${TWITTER_BEARER_TOKEN}"  # or bearer_token_env: "TWITTER_BEARER_TOKEN"
+    max_results: 10                # mentions to fetch per poll
+    request_timeout: 15
+```
+
+- **Drive wiring:** mention silence → `social.spike(0.1)`
+- **Requires:** Twitter API v2 Bearer Token (free tier sufficient)
+- **State:** Last-seen mention ID persisted to disk — survives restarts without re-counting
+- **Note:** Silence threshold defaults to 360 min because X engagement is slower-paced than Discord
+
+##### Git Sensor
+
+Monitors one or more git repositories for uncommitted work, untracked files, and stale pushes.
+
+```yaml
+sensors:
+  git:
+    enabled: false
+    repos:
+      - "/Users/iris/.openclaw/workspace"   # absolute paths to repos
+      - "/Users/iris/.openclaw/workspace/pulse"
+    stale_push_minutes: 120    # spike if last push was > 2 hours ago AND changes exist
+    fetch_remote: false        # set true to run `git fetch` and detect commits_behind
+    request_timeout: 10        # subprocess timeout per repo (seconds)
+```
+
+- **Drive wiring:**
+  - `uncommitted_changes` or `untracked_files > 0` → `goals.spike(0.15)`
+  - `stale_push` → `goals.spike(0.2)` (stronger — uncommitted + time elapsed)
+  - `commits_behind > 0` → `growth.spike(0.1)` (upstream has updates worth pulling)
+- **Graceful degradation:** Non-repo paths, missing `git` binary, and network errors are logged and skipped — never crash the daemon
+- **Note:** `fetch_remote: true` adds latency per loop; keep false unless `commits_behind` detection is needed
+
+##### Web Sensor (RSS / Atom)
+
+Monitors RSS and Atom feeds for new content. Spikes the `curiosity` drive when fresh items appear.
+
+```yaml
+sensors:
+  web:
+    enabled: false
+    feeds:
+      - "https://hnrss.org/frontpage"               # Hacker News
+      - "https://feeds.feedburner.com/TheAtlantic"  # any RSS/Atom URL
+    check_interval_minutes: 30    # minimum gap between feed polls (per-feed)
+    max_items_per_feed: 20        # cap items counted per check (avoids floods)
+    request_timeout: 15           # HTTP fetch timeout (seconds)
+```
+
+- **Drive wiring:** new feed items → `curiosity.spike(0.15)`
+- **Parsing:** Pure stdlib (`xml.etree.ElementTree`) — no feedparser dependency
+- **Supports:** RSS 2.0 and Atom 1.0 formats
+- **First-run grace:** Bookmarks the newest item on first check without flooding as "all new"
+- **State:** Per-feed last-seen IDs persisted to disk — restart-safe
+- **Graceful degradation:** Errored feeds are counted but never crash the sensor
+
+##### Calendar Sensor
+
+Monitors upcoming calendar events and spikes the `unfinished` drive as scheduled work approaches.
+
+```yaml
+sensors:
+  calendar:
+    enabled: false
+    backend: "auto"               # "auto" | "macos" | "ics"
+    ics_paths: []                 # paths to .ics files (for "ics" backend or "auto" fallback)
+    lookahead_minutes: 120        # scan for events within 2 hours
+    imminent_threshold_minutes: 30  # events within 30 min = imminent (stronger spike)
+    check_interval_minutes: 5       # minimum gap between full calendar scans
+    request_timeout: 5              # osascript subprocess timeout (seconds)
+```
+
+- **Drive wiring:**
+  - Event in lookahead window → `unfinished.spike(0.1)`
+  - Imminent event (≤ `imminent_threshold_minutes`) → `unfinished.spike(0.25)` (stronger — something is starting soon)
+- **Backends:**
+  - `macos` — uses `osascript` to query Apple Calendar.app; works with iCloud, Google Calendar, Exchange, CalDAV — anything Calendar.app sees
+  - `ics` — parses local `.ics` files with stdlib only; cross-platform and useful for exported calendars or CI
+  - `auto` — tries `macos` first, falls back to `ics` if osascript unavailable
+- **Reported keys:** `events_soon`, `event_count`, `next_event_minutes`, `imminent_event`, `backend_used`
+- **Note:** On non-macOS systems (Linux, Docker), set `backend: "ics"` and provide `ics_paths`
+
+---
+
+#### Drive Spike Reference
+
+| Sensor | Condition | Drive | Spike |
+|--------|-----------|-------|-------|
+| `discord` | Channel silence | `social` | +0.15 |
+| `twitter` | Mention silence | `social` | +0.10 |
+| `git` | Uncommitted/untracked | `goals` | +0.15 |
+| `git` | Stale push | `goals` | +0.20 |
+| `git` | Commits behind | `growth` | +0.10 |
+| `web` | New feed items | `curiosity` | +0.15 |
+| `calendar` | Event in lookahead | `unfinished` | +0.10 |
+| `calendar` | Imminent event | `unfinished` | +0.25 |
 
 ### Evaluator
 
