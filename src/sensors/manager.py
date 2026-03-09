@@ -40,9 +40,16 @@ class SensorManager:
             self.sensors.append(SystemSensor(config))
         # Conversation sensor always on (feeds evaluator suppression)
         self.sensors.append(ConversationSensor(config))
-        # Stub sensors — log if enabled but not yet implemented
+        # Phase 3: Discord sensor
         if getattr(config.sensors, "discord", None) and config.sensors.discord.enabled:
-            logger.warning("Discord sensor enabled in config but not yet implemented")
+            if config.sensors.discord.channels:
+                from pulse.src.sensors.discord_sensor import DiscordSensor
+                self.sensors.append(DiscordSensor(config))
+            else:
+                logger.warning(
+                    "Discord sensor enabled but no channels configured — "
+                    "add sensors.discord.channels in pulse.yaml"
+                )
         # Web and git sensors are Phase 3+
 
     async def start(self):

@@ -77,6 +77,13 @@ class DiscordSensorConfig:
     enabled: bool = False
     channels: List[str] = field(default_factory=list)
     silence_threshold_minutes: int = 180
+    # Bot token — set directly or via env var name (e.g. "DISCORD_BOT_TOKEN")
+    bot_token: str = ""
+    bot_token_env: str = "DISCORD_BOT_TOKEN"
+    # Per-channel silence thresholds (channel_id → minutes); falls back to silence_threshold_minutes
+    channel_thresholds: Dict[str, int] = field(default_factory=dict)
+    # Request timeout for Discord API calls (seconds)
+    request_timeout: int = 10
 
 
 @dataclass
@@ -336,6 +343,7 @@ class PulseConfig:
             s = data["sensors"]
             fs = s.get("filesystem", {})
             sys_s = s.get("system", {})
+            dc = s.get("discord", {})
             config.sensors = SensorsConfig(
                 filesystem=FilesystemSensorConfig(
                     enabled=fs.get("enabled", config.sensors.filesystem.enabled),
@@ -348,6 +356,25 @@ class PulseConfig:
                     ignore_self_writes=fs.get(
                         "ignore_self_writes",
                         config.sensors.filesystem.ignore_self_writes,
+                    ),
+                ),
+                discord=DiscordSensorConfig(
+                    enabled=dc.get("enabled", config.sensors.discord.enabled),
+                    channels=dc.get("channels", config.sensors.discord.channels),
+                    silence_threshold_minutes=dc.get(
+                        "silence_threshold_minutes",
+                        config.sensors.discord.silence_threshold_minutes,
+                    ),
+                    bot_token=dc.get("bot_token", config.sensors.discord.bot_token),
+                    bot_token_env=dc.get(
+                        "bot_token_env", config.sensors.discord.bot_token_env
+                    ),
+                    channel_thresholds=dc.get(
+                        "channel_thresholds",
+                        config.sensors.discord.channel_thresholds,
+                    ),
+                    request_timeout=dc.get(
+                        "request_timeout", config.sensors.discord.request_timeout
                     ),
                 ),
                 system=SystemSensorConfig(
