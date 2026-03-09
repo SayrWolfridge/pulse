@@ -144,6 +144,19 @@ class DriveEngine:
             if "social" in self.drives:
                 self.drives["social"].spike(0.1, self.config.drives.max_pressure)
 
+        # Git: uncommitted changes or stale push → goals drive
+        git_data = sensor_data.get("git", {})
+        if git_data.get("uncommitted_changes") or git_data.get("untracked_files", 0) > 0:
+            if "goals" in self.drives:
+                self.drives["goals"].spike(0.15, self.config.drives.max_pressure)
+        if git_data.get("stale_push"):
+            if "goals" in self.drives:
+                self.drives["goals"].spike(0.2, self.config.drives.max_pressure)
+        # Git: remote has updates we haven't pulled → growth drive
+        if git_data.get("commits_behind", 0) > 0:
+            if "growth" in self.drives:
+                self.drives["growth"].spike(0.1, self.config.drives.max_pressure)
+
         # System health issues → spike system drive (max once per min_trigger_interval)
         system_alerts = sensor_data.get("system", {}).get("alerts", [])
         if system_alerts:

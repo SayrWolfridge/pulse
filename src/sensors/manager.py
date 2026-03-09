@@ -60,7 +60,17 @@ class SensorManager:
                     "X/Twitter sensor enabled but no username configured — "
                     "add sensors.twitter.username in pulse.yaml"
                 )
-        # Web and git sensors are Phase 3+
+        # Phase 3: Git sensor
+        if getattr(config.sensors, "git", None) and config.sensors.git.enabled:
+            if config.sensors.git.repos:
+                from pulse.src.sensors.git_sensor import GitSensor
+                self.sensors.append(GitSensor(config))
+            else:
+                logger.warning(
+                    "Git sensor enabled but no repos configured — "
+                    "add sensors.git.repos in pulse.yaml"
+                )
+        # Web sensors are Phase 4+
 
     async def start(self):
         """Initialize all sensors."""

@@ -108,10 +108,20 @@ class TwitterSensorConfig:
 
 
 @dataclass
+class GitSensorConfig:
+    enabled: bool = False
+    repos: List[str] = field(default_factory=list)   # repo paths to watch (~ expanded)
+    stale_push_minutes: int = 60        # minutes ahead of remote before "stale_push" fires
+    fetch_remote: bool = False          # run `git fetch` each cycle (accurate behind-check)
+    request_timeout: int = 10           # per-subprocess timeout (seconds)
+
+
+@dataclass
 class SensorsConfig:
     filesystem: FilesystemSensorConfig = field(default_factory=FilesystemSensorConfig)
     discord: DiscordSensorConfig = field(default_factory=DiscordSensorConfig)
     twitter: TwitterSensorConfig = field(default_factory=TwitterSensorConfig)
+    git: GitSensorConfig = field(default_factory=GitSensorConfig)
     system: SystemSensorConfig = field(default_factory=SystemSensorConfig)
 
 
@@ -360,6 +370,7 @@ class PulseConfig:
             sys_s = s.get("system", {})
             dc = s.get("discord", {})
             tw = s.get("twitter", {})
+            gt = s.get("git", {})
             config.sensors = SensorsConfig(
                 filesystem=FilesystemSensorConfig(
                     enabled=fs.get("enabled", config.sensors.filesystem.enabled),
@@ -411,6 +422,19 @@ class PulseConfig:
                     ),
                     request_timeout=tw.get(
                         "request_timeout", config.sensors.twitter.request_timeout
+                    ),
+                ),
+                git=GitSensorConfig(
+                    enabled=gt.get("enabled", config.sensors.git.enabled),
+                    repos=gt.get("repos", config.sensors.git.repos),
+                    stale_push_minutes=gt.get(
+                        "stale_push_minutes", config.sensors.git.stale_push_minutes
+                    ),
+                    fetch_remote=gt.get(
+                        "fetch_remote", config.sensors.git.fetch_remote
+                    ),
+                    request_timeout=gt.get(
+                        "request_timeout", config.sensors.git.request_timeout
                     ),
                 ),
                 system=SystemSensorConfig(
