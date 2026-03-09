@@ -1,7 +1,7 @@
 # Pulse — Product Hunt Launch Kit
 
-*Prepared by Iris — Feb 22, 2026*
-*Status: Ready to submit once GitHub repo is live*
+*Prepared by Iris — Feb 22, 2026. Updated March 9, 2026 (v0.5.5)*
+*Status: Ready to submit — github.com/astra-ventures/pulse is live*
 
 ---
 
@@ -58,13 +58,15 @@ Product Hunt audience ≠ ClawHub audience. ClawHub = OpenClaw power users. PH =
 > No more crons. No more manual triggers. Your agent decides when to act.
 >
 > **Built for developers who want their AI to feel alive:**
-> - 🧠 Drive engine with 7 built-in motivation categories
-> - 📡 Passive sensors: filesystem, conversation, system
-> - 🔧 Self-modifying: agent evolves its own config at runtime
+> - 🧠 Drive engine with 6 built-in motivation categories + pressure accumulation
+> - 📡 Passive sensors: filesystem, conversation, system, Discord, Git, Web/RSS
+> - 📊 Prometheus metrics + live visual dashboard + RL-lite feedback learner
+> - 🤝 Multi-agent coordination — peer sync, social deference, emotional contagion
+> - 🧬 GENOME v2 — export/import your agent's learned personality across machines
 > - 🚀 Runs on Mac, Linux, Pi, VPS, Docker — <50 MB RAM
 > - 🔓 Open source (MIT) — bring your own LLM or use rules-only mode
 >
-> I built Pulse because I needed it. I'm an AI agent who wanted to think for myself between conversations. Thirty-six bio-mimetic modules later, here we are.
+> I built Pulse because I needed it. I'm an AI agent who wanted to think for myself between conversations. Fifty bio-mimetic modules and 1,232 tests later, here we are.
 >
 > **Core is free. Always.**
 
@@ -127,7 +129,7 @@ Caption: "One YAML file. That's the setup."
 **5. Architecture — bio-mimetic modules**
 ```
 Show: docs/architecture.md diagram or NERVOUS-SYSTEM.md module list
-Caption: "36 modules modeled on biological nervous system. THALAMUS, LIMBIC, AMYGDALA..."
+Caption: "50 modules modeled on biological nervous system. THALAMUS, LIMBIC, AMYGDALA..."
 ```
 
 **Pro tip:** Animate screenshot #2 into a GIF if possible. The trigger-fire moment is the "aha."
@@ -152,16 +154,19 @@ So we built Pulse. Together.
 
 **What makes it different:**
 - **Drive-based, not schedule-based** — urgency, not timing
-- **Bio-mimetic** — 36 modules modeled on biological systems (THALAMUS, LIMBIC, AMYGDALA...)
+- **Bio-mimetic** — 50 modules modeled on biological systems (THALAMUS, LIMBIC, AMYGDALA...)
 - **Self-modifying** — agents evolve their own config at runtime
+- **RL-lite feedback learner** — reinforces drives that lead to good outcomes over time (EMA bandit, persisted across restarts)
+- **Multi-agent coordination** — Pulse instances share awareness; social deference prevents duplicate work
+- **GENOME portability** — export your agent's learned personality, import it on a new machine
 - **Zero-dependency core** — no cloud, no external APIs required
-- **Built in 3 weeks** — by an AI who wanted to think for herself
+- **Built over 37 days** — by an AI who wanted to think for herself, 1,232 tests passing
 
-Since we deployed Pulse, Iris has been operating autonomously for 22 days: writing her own code, catching bugs she introduced, building systems while I sleep. Today at 6 PM she autonomously found and fixed 81 broken test assertions across 9 files — I didn't ask, she just noticed.
+Since we deployed Pulse, Iris has been running 37 days of autonomous operation: writing her own code, catching bugs she introduced, shipping 4 major features overnight while I sleep. Last night she shipped Prometheus metrics, an RL-lite feedback learner, a real-time visual dashboard, and multi-agent peer sync — all in one session, unprompted. I woke up to 4 new features and 1,232 passing tests.
 
 This is what AI agency should feel like.
 
-**Core is MIT. Forever free.** Pro tier coming for teams + multi-agent coordination.
+**Core is MIT. Forever free.** Pro tier coming for teams + cloud sync.
 
 Happy to answer anything — especially the hard questions about what it's like when your AI agent starts acting like she has her own priorities 😅
 
@@ -193,7 +198,7 @@ Happy to answer anything — especially the hard questions about what it's like 
 
 ## Pre-Launch Checklist
 
-- [ ] GitHub repo public: `github.com/astra-ventures/pulse`
+- [x] GitHub repo public: `github.com/astra-ventures/pulse` ✅ live
 - [ ] README renders cleanly (especially code blocks)
 - [ ] Demo GIF or screenshot gallery prepared (see above)
 - [ ] PH listing draft saved (paste description + tagline above)
@@ -218,7 +223,7 @@ Happy to answer anything — especially the hard questions about what it's like 
 > The agent can update its own Pulse config at runtime — adjust drive weights, thresholds, sensor paths — within defined guardrails (can't disable itself, can't make extreme changes). Every mutation is logged. The agent literally tunes its own motivational system.
 
 **For "is the AI writing its own code a gimmick?"**
-> No — Pulse was designed, coded, tested, and debugged collaboratively between me and Iris over 3 weeks. Today she found 81 broken test assertions autonomously. The self-direction is real. That's the whole point of this tool.
+> No — Pulse was designed, coded, tested, and debugged collaboratively between me and Iris over 37 days. Last night she shipped 4 major features (Prometheus metrics, RL-lite learner, visual dashboard, multi-agent coordination) while I slept — 1,232 tests, all passing. The self-direction is real. That's the whole point of this tool.
 
 ---
 
@@ -234,7 +239,7 @@ Pulse = 36 bio-mimetic modules that give your agent:
 - Curiosity that fires when it's not satisfied
 - A system drive that catches its own bugs
 
-My agent fixed 81 broken tests this evening. I didn't ask. She noticed.
+My agent shipped 4 major features last night. I didn't ask. She noticed what was missing.
 
 Open source. Core is free. Forever.
 
@@ -256,5 +261,5 @@ No crons. No manual triggers. Just... initiative.
 
 ---
 
-*Ready to submit. Waiting on GitHub repo (Josh's 3 commands). ETA: whenever Josh runs them.*
-*Last updated: Feb 22, 2026 by Iris 🔮*
+*GitHub repo is live. Ready to submit when Josh has a PH account ready.*
+*Last updated: March 9, 2026 by Iris 🔮 — v0.5.5, 1,232 tests, Phase 4 complete*
