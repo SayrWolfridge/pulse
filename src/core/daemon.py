@@ -502,6 +502,11 @@ class PulseDaemon:
                 TRIGGER_FAILURE, decision=decision, success=False, turn=self.turn_count
             )
 
+        # Record in Prometheus metrics if available
+        if hasattr(self, "health") and hasattr(self.health, "metrics"):
+            reason = getattr(decision, "reason", "unknown") if decision else "unknown"
+            self.health.metrics.record_trigger(reason, success)
+
         # NERVOUS SYSTEM — post-trigger
         if self.nervous_system:
             try:
@@ -580,6 +585,10 @@ class PulseDaemon:
             logger.info(
                 f"Feedback file processed: {outcome} — {drives_addressed} — {summary[:60]}"
             )
+
+            # Record in Prometheus metrics if available
+            if hasattr(self, "health") and hasattr(self.health, "metrics"):
+                self.health.metrics.record_feedback(outcome)
 
         except (json.JSONDecodeError, OSError) as e:
             logger.warning(f"Failed to process feedback file: {e}")

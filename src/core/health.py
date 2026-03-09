@@ -35,7 +35,12 @@ class HealthServer:
         self._app.router.add_get("/evolution", self._handle_evolution)
         self._app.router.add_get("/mutations", self._handle_mutations)
         self._app.router.add_post("/feedback", self._handle_feedback)
+        self._app.router.add_get("/metrics", self._handle_metrics)
         self._runner: web.AppRunner | None = None
+
+        # Prometheus metrics collector — lazy import avoids circular deps
+        from pulse.src.metrics import PulseMetrics
+        self.metrics = PulseMetrics(daemon)
 
     async def start(self):
         """Start the health server."""
@@ -46,6 +51,9 @@ class HealthServer:
             await site.start()
             logger.info(
                 f"Health endpoint listening on http://127.0.0.1:{self.port}/health"
+            )
+            logger.info(
+                f"Prometheus metrics at http://127.0.0.1:{self.port}/metrics"
             )
         except OSError as e:
             logger.warning(f"Could not start health endpoint on port {self.port}: {e}")
@@ -232,3 +240,23 @@ class HealthServer:
             },
             dumps=lambda o: json.dumps(o, default=str),
         )
+
+    async def _handle_metrics(self, request: web.Request) -> web.Response:
+        """Prometheus text metrics endpoint.
+
+        GET /metrics
+
+        Returns all Pulse runtime metrics in Prometheus text exposition
+        format v0.0.4.  Compatible with any Prometheus scraper and most
+        observability platforms (Grafana, Datadog agent, VictoriaMetrics,
+        etc.).
+
+        Example scrape config::
+
+            scrape_configs:
+              - job_name: pulse
+                static_configs:
+                  - targets: ['localhost:9720']
+                metrics_path: /metrics
+        """
+        return await self.metrics.handle(request)

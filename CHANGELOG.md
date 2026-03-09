@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-03-09
+
+### Added
+- **Prometheus Metrics — Phase 4** (`GET /metrics` on the health port)
+  - Zero external dependencies — implements Prometheus text exposition format v0.0.4 directly
+  - New module `src/metrics.py` with `PulseMetrics` collector class
+  - Gauges: `pulse_uptime_seconds`, `pulse_drives_pressure{drive}`, `pulse_drives_weight{drive}`
+  - Counters: `pulse_triggers_total{reason}`, `pulse_trigger_failures_total{reason}`, `pulse_feedback_total{outcome}`, `pulse_turn_count_total`, `pulse_instincts_fired_total{instinct}`
+  - Info: `pulse_info{version, python_version}` (build metadata)
+  - `/metrics` route added to HealthServer alongside existing `/health` and `/status`
+  - Daemon wired: trigger success/failure and feedback outcomes automatically recorded
+  - Compatible with Prometheus, Grafana, Datadog agent, VictoriaMetrics, and any OpenMetrics scraper
+  - 48 new tests covering text format helpers, collection output, counter mutations, async handler, error handling, and HealthServer integration
+- **Test suite: 1033 → 1081 tests** (48 new)
+
 ## [0.5.0] - 2026-03-08
 
 ### Added

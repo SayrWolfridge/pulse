@@ -57,6 +57,42 @@ daemon:
 - `iris` — Iris-specific workspace layout (goals.json, curiosity.json, etc.)
 - Custom: `"mypackage.integrations.custom"` (must subclass `Integration`)
 
+### Prometheus Metrics
+
+Pulse exposes a Prometheus-compatible metrics endpoint at `GET /metrics` on the same health port. No extra configuration needed — it's always available.
+
+```bash
+# Quick test
+curl http://localhost:9720/metrics
+```
+
+**Metrics exposed:**
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `pulse_info{version, python_version}` | gauge | Build metadata (always 1) |
+| `pulse_uptime_seconds` | gauge | Seconds since daemon started |
+| `pulse_turn_count_total` | counter | Total agent turns fired |
+| `pulse_drives_pressure{drive}` | gauge | Current pressure per drive (0.0–5.0+) |
+| `pulse_drives_weight{drive}` | gauge | Configured weight per drive |
+| `pulse_triggers_total{reason}` | counter | Successful triggers by reason |
+| `pulse_trigger_failures_total{reason}` | counter | Failed trigger attempts by reason |
+| `pulse_feedback_total{outcome}` | counter | Feedback calls by outcome (success/partial/blocked) |
+| `pulse_instincts_fired_total{instinct}` | counter | Instinct executions by name |
+
+**Prometheus scrape config:**
+
+```yaml
+scrape_configs:
+  - job_name: pulse
+    static_configs:
+      - targets: ['localhost:9720']
+    metrics_path: /metrics
+    scrape_interval: 30s
+```
+
+Zero external dependencies — implements the [Prometheus text exposition format](https://prometheus.io/docs/instrumenting/exposition_formats/) directly.
+
 ### Drives
 
 ```yaml
