@@ -143,12 +143,12 @@ NIST AI Agent Standards Initiative (launched Feb 2026) creates enterprise demand
 | A2: ClawHub submit | 1 hr | Josh: jcap93 org fix | Josh + Iris |
 | A3: Product Hunt | 2 hrs | Josh: PH account | Josh + Iris |
 | A4: Docker Hub | 45 min | Docker Hub account | Iris (once account exists) |
-| B1: GENOME export v2 | 3 hrs | None | Iris |
-| B2: GENOME import | 2 hrs | None | Iris |
-| C1: NIST compliance docs | 2 hrs | None | Iris |
+| B1: GENOME export v2 | 3 hrs | ✅ Done | Iris — v0.5.5, 41 tests |
+| B2: GENOME import | 2 hrs | ✅ Done | Iris — v0.5.5, merge policies |
+| C1: NIST compliance docs | 2 hrs | ✅ Done | Iris — docs/COMPLIANCE.md |
 
-**Iris-unblocked items (can ship tonight or next triggers):** B1, B2, C1
-**Josh-blocked items:** A1, A2, A3 (all simple, 30-60 min total Josh time)
+**Iris-unblocked items:** ✅ ALL COMPLETE (B1, B2, C1 shipped March 9, 2026)
+**Josh-blocked items:** A1, A2, A3, A4 (all simple, 30-60 min total Josh time)
 
 ---
 
@@ -173,4 +173,4 @@ The open-source core is PyTorch. The Hypostas stack is the application. Phase 5 
 
 ---
 
-*Next: Iris starts B1 (GENOME export v2) in next Pulse trigger. Josh handles A1-A3 when available.*
+*Status: All Iris-unblocked Phase 5 work complete (B1+B2 in v0.5.5, C1 in docs/COMPLIANCE.md). Josh handles A1-A4 when available — that's all that remains.*

@@ -6,7 +6,7 @@ Pulse is a persistent daemon that gives AI agents self-directed initiative. Inst
 
 Built for [OpenClaw](https://openclaw.ai), portable across any deployment.
 
-**1231 tests** · Python 3.11+ · MIT License · Docker-ready · v0.5.5
+**1232 tests** · Python 3.11+ · MIT License · Docker-ready · v0.5.5
 
 ---
 
@@ -51,11 +51,19 @@ Built for [OpenClaw](https://openclaw.ai), portable across any deployment.
 - Guardrails — prevents self-disabling, extreme changes, mutation spam
 - Audit log — every self-modification is timestamped and explained
 
+🧬 **Identity Portability** *(v0.5.5)*
+- GENOME v2 export — captures full personality: modules, phenotype, drives, learned RL-lite weights, sensor config
+- GENOME v2 import — restores personality to a new instance with merge policies (overwrite or blend)
+- Schema validation with bounds checking on all learned parameters
+- Backward-compatible with v1 genomes
+- CLI: `pulse genome export`, `pulse genome import FILE [--merge blend]`
+
 🚀 **Production-Ready**
 - Portable — runs on Mac, Linux, Pi, VPS, Docker
 - Lightweight — <50 MB RAM, <0.1% CPU idle
 - Persistent — state survives restarts, migrations, hardware changes
 - Zero OpenClaw coupling — communicates purely via webhook API
+- NIST AI RMF aligned — [compliance documentation](docs/COMPLIANCE.md) for enterprise security reviews
 
 ---
 
@@ -238,11 +246,19 @@ See [INSTINCT_SPEC.md](INSTINCT_SPEC.md) for the full spec and [instincts/](inst
 - Web/RSS sensor (feed monitoring → curiosity drive)
 - Documentation hardening: configuration.md, drive spike reference table, pulse.example.yaml
 
-### Phase 4: Advanced *(in progress)*
-- Prometheus metrics endpoint (`GET /metrics`) ✅
-- RL-lite feedback learning (EMA-based adaptive drive weights) ✅
-- Visual dashboard (drive state, instinct log, learner card, WebSocket) ✅
-- ~~Multi-agent coordination (shared drives across agent network)~~ ✅ Shipped in v0.5.4
+### Phase 4: Advanced ✅
+- Prometheus metrics endpoint (`GET /metrics`) ✅ v0.5.1
+- RL-lite feedback learning (EMA-based adaptive drive weights) ✅ v0.5.2
+- Visual dashboard (drive state, instinct log, learner card, WebSocket) ✅ v0.5.3
+- Multi-agent coordination (peer sync, shared drives across agent network) ✅ v0.5.4
+
+### Phase 5: Launch & Identity *(in progress)*
+- GENOME v2 identity bundle — full personality export/import with learned weights ✅ v0.5.5
+- NIST AI RMF compliance documentation ✅ [docs/COMPLIANCE.md](docs/COMPLIANCE.md)
+- PyPI publish (`pip install pulse-agent`) *(next)*
+- ClawHub submission *(next)*
+- Product Hunt launch *(next)*
+- Docker Hub publish *(next)*
 
 ---
 
