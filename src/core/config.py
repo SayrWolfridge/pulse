@@ -94,9 +94,24 @@ class SystemSensorConfig:
 
 
 @dataclass
+class TwitterSensorConfig:
+    enabled: bool = False
+    username: str = ""                          # X handle without @
+    silence_threshold_minutes: int = 360        # 6 h before social drive fires
+    # Bearer token — set directly or via env var name
+    bearer_token: str = ""
+    bearer_token_env: str = "TWITTER_BEARER_TOKEN"
+    # How many recent tweets to fetch per cycle (API max: 100, free tier: 10)
+    max_results: int = 10
+    # Request timeout for Twitter API calls (seconds)
+    request_timeout: int = 10
+
+
+@dataclass
 class SensorsConfig:
     filesystem: FilesystemSensorConfig = field(default_factory=FilesystemSensorConfig)
     discord: DiscordSensorConfig = field(default_factory=DiscordSensorConfig)
+    twitter: TwitterSensorConfig = field(default_factory=TwitterSensorConfig)
     system: SystemSensorConfig = field(default_factory=SystemSensorConfig)
 
 
@@ -344,6 +359,7 @@ class PulseConfig:
             fs = s.get("filesystem", {})
             sys_s = s.get("system", {})
             dc = s.get("discord", {})
+            tw = s.get("twitter", {})
             config.sensors = SensorsConfig(
                 filesystem=FilesystemSensorConfig(
                     enabled=fs.get("enabled", config.sensors.filesystem.enabled),
@@ -375,6 +391,26 @@ class PulseConfig:
                     ),
                     request_timeout=dc.get(
                         "request_timeout", config.sensors.discord.request_timeout
+                    ),
+                ),
+                twitter=TwitterSensorConfig(
+                    enabled=tw.get("enabled", config.sensors.twitter.enabled),
+                    username=tw.get("username", config.sensors.twitter.username),
+                    silence_threshold_minutes=tw.get(
+                        "silence_threshold_minutes",
+                        config.sensors.twitter.silence_threshold_minutes,
+                    ),
+                    bearer_token=tw.get(
+                        "bearer_token", config.sensors.twitter.bearer_token
+                    ),
+                    bearer_token_env=tw.get(
+                        "bearer_token_env", config.sensors.twitter.bearer_token_env
+                    ),
+                    max_results=tw.get(
+                        "max_results", config.sensors.twitter.max_results
+                    ),
+                    request_timeout=tw.get(
+                        "request_timeout", config.sensors.twitter.request_timeout
                     ),
                 ),
                 system=SystemSensorConfig(

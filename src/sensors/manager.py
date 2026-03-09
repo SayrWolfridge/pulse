@@ -50,6 +50,16 @@ class SensorManager:
                     "Discord sensor enabled but no channels configured — "
                     "add sensors.discord.channels in pulse.yaml"
                 )
+        # Phase 3: X/Twitter sensor
+        if getattr(config.sensors, "twitter", None) and config.sensors.twitter.enabled:
+            if config.sensors.twitter.username:
+                from pulse.src.sensors.twitter_sensor import TwitterSensor
+                self.sensors.append(TwitterSensor(config))
+            else:
+                logger.warning(
+                    "X/Twitter sensor enabled but no username configured — "
+                    "add sensors.twitter.username in pulse.yaml"
+                )
         # Web and git sensors are Phase 3+
 
     async def start(self):

@@ -139,6 +139,11 @@ class DriveEngine:
             if "social" in self.drives:
                 self.drives["social"].spike(0.2, self.config.drives.max_pressure)
 
+        # X/Twitter silence → social drive (softer spike — X moves slower than Discord)
+        if sensor_data.get("twitter", {}).get("silent_x"):
+            if "social" in self.drives:
+                self.drives["social"].spike(0.1, self.config.drives.max_pressure)
+
         # System health issues → spike system drive (max once per min_trigger_interval)
         system_alerts = sensor_data.get("system", {}).get("alerts", [])
         if system_alerts:
