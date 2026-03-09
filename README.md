@@ -169,6 +169,7 @@ See [INSTINCT_SPEC.md](INSTINCT_SPEC.md) for the full spec and [instincts/](inst
 - [Architecture](docs/architecture.md) — how Pulse works (drive engine, sensors, evaluator, state)
 - [Configuration](docs/configuration.md) — complete reference, tuning guide
 - [Deployment](docs/deployment.md) — production setup, monitoring, troubleshooting
+- [Compliance](docs/COMPLIANCE.md) — NIST AI RMF alignment, observable autonomy, enterprise deployment guidance
 - [Examples](examples/) — sample configs (personal assistant, trading bot)
 
 ---
