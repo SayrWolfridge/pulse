@@ -6,7 +6,7 @@ Pulse is a persistent daemon that gives AI agents self-directed initiative. Inst
 
 Built for [OpenClaw](https://openclaw.ai), portable across any deployment.
 
-**1081 tests** · Python 3.11+ · MIT License · Docker-ready · v0.5.1
+**1152 tests** · Python 3.11+ · MIT License · Docker-ready · v0.5.3
 
 ---
 
@@ -28,7 +28,17 @@ Built for [OpenClaw](https://openclaw.ai), portable across any deployment.
 - Filesystem sensor — watches workspace for changes
 - Conversation sensor — detects when human is active (suppresses interruptions)
 - System sensor — monitors daemon health
-- Extensible — add custom sensors (Discord, X, calendars, APIs)
+- Discord sensor — channel silence detection, activity scoring
+- X/Twitter sensor — mention tracking, trend monitoring
+- Calendar sensor — upcoming event awareness
+- Git sensor — commit activity, repo health
+- Web/RSS sensor — feed monitoring → curiosity drive
+
+📊 **Observability**
+- Prometheus metrics (`GET /metrics`) — drives, triggers, feedback outcomes as scrapable gauges/counters
+- Visual dashboard (`GET /dashboard`) — real-time drive state, instinct log, feedback learner card
+- RL-lite feedback learning — EMA-based adaptive weights; drives that succeed get reinforced automatically
+- WebSocket stream — live state broadcasts every 5 seconds
 
 🎯 **Smart Triggering**
 - Rules mode (default) — simple threshold math, zero AI calls
@@ -219,17 +229,19 @@ See [INSTINCT_SPEC.md](INSTINCT_SPEC.md) for the full spec and [instincts/](inst
 - ClawHub submission *(next)*
 - Product Hunt launch *(next)*
 
-### Phase 3: Integrations
+### Phase 3: Integrations ✅
 - Discord sensor (channel silence detection)
 - X/Twitter sensor (mentions, trends)
 - Calendar sensor (upcoming events)
-- Model-based evaluator improvements
+- Git sensor (commit activity, repo health)
+- Web/RSS sensor (feed monitoring → curiosity drive)
+- Documentation hardening: configuration.md, drive spike reference table, pulse.example.yaml
 
 ### Phase 4: Advanced *(in progress)*
 - Prometheus metrics endpoint (`GET /metrics`) ✅
-- Multi-agent coordination (shared drives)
-- Learning from feedback (RL-lite)
-- Visual dashboard (web UI)
+- RL-lite feedback learning (EMA-based adaptive drive weights) ✅
+- Visual dashboard (drive state, instinct log, learner card, WebSocket) ✅
+- Multi-agent coordination (shared drives across agent network)
 
 ---
 
