@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-03-09
+
+### Added
+- **Multi-agent Coordination — Phase 4** (`src/peer_sync.py`)
+  - `PeerSync` class: polls sibling Pulse instances via their `/status` endpoint, tracks drive state, AURA, reachability, and version
+  - `PeerInfo` dataclass: runtime state per peer (drives, mood, energy, focus, availability, consecutive failures)
+  - THALAMUS signal injection: 4 signal types at low salience (0.08–0.20) so peers inform without overriding local agency
+    - `peer_available` (salience 0.10): peer is up and not overloaded
+    - `peer_busy` (salience 0.20): peer's top drive matches — social deference to avoid duplication
+    - `peer_mood_shift` (salience 0.08): emotional contagion from peer mood state
+    - `peer_offline` (salience 0.15): peer unreachable for 3+ consecutive polls
+  - Stale detection: peer data older than 120s treated as unknown (STALE_SECONDS)
+  - Atomic state persistence to `peers.json` (tokens excluded — never written to disk)
+  - Module-level singleton: `init()`, `get_instance()`, `get_status()` for observation API integration
+  - Wired into `NervousSystem.post_loop()`: polls peers on interval and injects signals after AURA emit
+- **Config: `PeerConfig` + `PeersConfig` dataclasses** (`src/core/config.py`)
+  - `peers.enabled`, `peers.poll_interval_seconds`, `peers.peers[]` (name, url, token, role)
+  - Added `peers` field to `PulseConfig` — disabled by default (zero overhead when unused)
+- **Observation API: `GET /state/peers`** (`src/observation_api.py`)
+  - Auth-gated endpoint returning total/reachable counts + per-peer summary
+  - WebSocket `/stream` now includes `peers` in every 5-second broadcast
+  - File-based fallback: reads `peers.json` if module not loaded
+- **Test suite: 1152 → 1191 tests** (39 new)
+  - `TestPeerInfo` (3): dataclass defaults, custom construction, mutability
+  - `TestPeerSyncInit` (6): empty config, peer registration, invalid peers, poll interval, should_poll
+  - `TestFetchJson` (3): success, failure, invalid JSON
+  - `TestPollPeer` (6): dict drives, list drives, unreachable, consecutive failures, recovery, AURA fallback
+  - `TestThalamusInjection` (8): available/busy/offline/stale signals, neutral mood, salience levels, data shape, graceful no-thalamus
+  - `TestSerialization` (2): file creation, token exclusion
+  - `TestGetSummary` (3): empty, with peers, stale peer
+  - `TestModuleSingleton` (2): pre-init status, init+get_instance
+  - `TestConfigIntegration` (3): PeerConfig/PeersConfig defaults, PulseConfig.peers
+  - `TestMultiPeerScenarios` (3): mixed reachability, low-failure no-offline, empty peers
+
+### Phase 4 Status
+**All four Phase 4 features now shipped:**
+- ✅ Prometheus metrics (v0.5.1)
+- ✅ RL-lite feedback learner (v0.5.2)
+- ✅ Visual dashboard learner card (v0.5.3)
+- ✅ Multi-agent coordination (v0.5.4)
+
 ## [0.5.3] - 2026-03-09
 
 ### Added

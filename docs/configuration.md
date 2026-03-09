@@ -595,6 +595,63 @@ State persists to `<state_dir>/feedback_learner.json` and survives daemon restar
 
 ---
 
+## Multi-Agent Coordination (Peer Sync)
+
+Run multiple Pulse instances (e.g., Iris + Scout + Edge) and have them coordinate through social THALAMUS signals. Each instance polls its peers' `/status` endpoint and injects low-salience signals so agents naturally de-duplicate work and share mood state.
+
+### Configuration
+
+```yaml
+peers:
+  enabled: true
+  poll_interval_seconds: 60
+  peers:
+    - name: scout
+      url: http://192.168.1.50:9720
+      token: ${SCOUT_PULSE_TOKEN}
+      role: researcher
+    - name: edge
+      url: http://192.168.1.51:9720
+      token: ${EDGE_PULSE_TOKEN}
+      role: trader
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `peers.enabled` | `false` | Enable multi-agent coordination |
+| `peers.poll_interval_seconds` | `60` | Seconds between polling cycles |
+| `peers[].name` | (required) | Human-readable peer name |
+| `peers[].url` | (required) | Base URL of peer's health server |
+| `peers[].token` | `""` | Peer's `PULSE_HOOK_TOKEN` for auth |
+| `peers[].role` | `""` | Optional label (e.g. "researcher", "trader") |
+
+### Signal Types
+
+Peer state is injected into THALAMUS as social signals:
+
+| Signal | Salience | Condition | Meaning |
+|--------|----------|-----------|---------|
+| `peer_available` | 0.10 | Peer reachable + pressure < 3.0 | Social presence, peer can take work |
+| `peer_busy` | 0.20 | Peer top_pressure ≥ 3.0 | Avoid duplicating this drive's work |
+| `peer_mood_shift` | 0.08 | Peer mood ≠ neutral/unknown | Gentle emotional contagion |
+| `peer_offline` | 0.15 | 3+ consecutive poll failures | System awareness — peer may need help |
+
+### Observation API
+
+- **`GET /state/peers`** — returns peer count, reachability, and per-peer summary
+- **WebSocket `/stream`** — includes `peers` in every 5-second broadcast
+
+### Design Principles
+
+- **Zero coupling:** reads only the public `/status` endpoint — no shared state, no new protocol
+- **Fail-safe:** unreachable peers are marked stale after 120s, never crash the daemon
+- **Low salience:** peer signals inform but never override local agency (all ≤ 0.20)
+- **Token safety:** peer tokens are held in memory only — never persisted to `peers.json`
+
+State persists to `<state_dir>/peers.json` and survives daemon restarts.
+
+---
+
 ## Next Steps
 
 - [Architecture](architecture.md) — how Pulse works

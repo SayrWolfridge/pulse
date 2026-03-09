@@ -220,6 +220,7 @@ class NervousSystem:
         self._mod_parietal = None
         self.parietal = None
         self._mod_superego = None
+        self._peer_sync = None  # PeerSync instance (multi-agent coordination)
 
         self._init_modules()
 
@@ -627,6 +628,39 @@ class NervousSystem:
             logger.info("✓ PARIETAL loaded")
         except Exception as e:
             logger.warning(f"✗ PARIETAL failed: {e}")
+
+        # PEER_SYNC — multi-agent coordination
+        try:
+            peers_cfg = getattr(self.config, "peers", None)
+            if peers_cfg and getattr(peers_cfg, "enabled", False):
+                from pulse.src import peer_sync as _peer_sync_mod
+
+                peers_list = [
+                    {
+                        "name": p.name,
+                        "url": p.url,
+                        "token": p.token,
+                        "role": p.role,
+                    }
+                    for p in (peers_cfg.peers or [])
+                    if p.name and p.url
+                ]
+                if peers_list:
+                    self._peer_sync = _peer_sync_mod.init(
+                        peers_config=peers_list,
+                        poll_interval=getattr(peers_cfg, "poll_interval_seconds", 60),
+                    )
+                    logger.info(
+                        "✓ PEER_SYNC loaded — %d peer(s): %s",
+                        len(peers_list),
+                        [p["name"] for p in peers_list],
+                    )
+                else:
+                    logger.info("PEER_SYNC enabled but no valid peers configured — skipping")
+            else:
+                logger.debug("PEER_SYNC disabled (peers.enabled=false)")
+        except Exception as e:
+            logger.warning(f"✗ PEER_SYNC failed: {e}")
 
         # SUPEREGO — runtime identity enforcement
         try:
@@ -1852,6 +1886,16 @@ class NervousSystem:
                         logger.warning(
                             f"post_loop HYPOTHALAMUS/{mod_name} signal failed: {e}"
                         )
+
+        # PEER_SYNC — poll sibling Pulse instances and inject social signals
+        if self._peer_sync and self._peer_sync.should_poll():
+            try:
+                self._peer_sync.poll_all()
+                self._peer_sync.inject_thalamus_signals()
+                result["peer_sync_polled"] = True
+                result["peers_reachable"] = self._peer_sync.get_summary().get("reachable", 0)
+            except Exception as e:
+                logger.warning(f"post_loop PEER_SYNC failed: {e}")
 
         return result
 

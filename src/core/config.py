@@ -215,6 +215,21 @@ class DaemonConfig:
 
 
 @dataclass
+class PeerConfig:
+    name: str = ""
+    url: str = ""  # base URL of the peer's health server, e.g. "http://192.168.1.50:9720"
+    token: str = ""  # PULSE_HOOK_TOKEN of the peer instance
+    role: str = ""  # optional label, e.g. "scout", "trader", "builder"
+
+
+@dataclass
+class PeersConfig:
+    enabled: bool = False
+    poll_interval_seconds: int = 60
+    peers: List[PeerConfig] = field(default_factory=list)
+
+
+@dataclass
 class ParietalConfig:
     enabled: bool = True
     scan_interval_hours: float = 6.0
@@ -248,6 +263,7 @@ class PulseConfig:
     generative: GenerativeConfig = field(default_factory=GenerativeConfig)
     instincts: InstinctsConfig = field(default_factory=InstinctsConfig)
     parietal: ParietalConfig = field(default_factory=ParietalConfig)
+    peers: PeersConfig = field(default_factory=PeersConfig)
 
     @classmethod
     def load(cls, config_path: Optional[str] = None) -> "PulseConfig":

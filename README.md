@@ -6,7 +6,7 @@ Pulse is a persistent daemon that gives AI agents self-directed initiative. Inst
 
 Built for [OpenClaw](https://openclaw.ai), portable across any deployment.
 
-**1152 tests** · Python 3.11+ · MIT License · Docker-ready · v0.5.3
+**1191 tests** · Python 3.11+ · MIT License · Docker-ready · v0.5.4
 
 ---
 
@@ -241,7 +241,7 @@ See [INSTINCT_SPEC.md](INSTINCT_SPEC.md) for the full spec and [instincts/](inst
 - Prometheus metrics endpoint (`GET /metrics`) ✅
 - RL-lite feedback learning (EMA-based adaptive drive weights) ✅
 - Visual dashboard (drive state, instinct log, learner card, WebSocket) ✅
-- Multi-agent coordination (shared drives across agent network)
+- ~~Multi-agent coordination (shared drives across agent network)~~ ✅ Shipped in v0.5.4
 
 ---
 

@@ -12,6 +12,8 @@ Endpoints:
     GET /state/endocrine            → hormone levels
     GET /state/circadian            → energy, sleep phase, time profile
     GET /state/soma                 → physical/energy state
+    GET /state/learner              → RL-lite feedback learner stats
+    GET /state/peers                → multi-agent peer sync status
     GET /chronicle/recent?n=20      → last N CHRONICLE events
     GET /engram/search?q=text       → search memory engrams
     WS  /stream                     → WebSocket live state updates (5s intervals)
@@ -239,6 +241,36 @@ def _get_soma_data() -> dict:
     }
 
 
+def _get_peers_data() -> dict:
+    """Read peer sync state from live module or persisted file."""
+    try:
+        from pulse.src import peer_sync
+        return peer_sync.get_status()
+    except ImportError:
+        pass
+    # Fallback: read persisted peers.json
+    raw = _read_json("peers.json", {})
+    if not raw:
+        return {"enabled": False, "total": 0, "reachable": 0, "peers": []}
+    peers = []
+    reachable = 0
+    for name, p in raw.items():
+        is_reachable = p.get("reachable", False)
+        if is_reachable:
+            reachable += 1
+        peers.append({
+            "name": name,
+            "role": p.get("role", ""),
+            "reachable": is_reachable,
+            "top_drive": p.get("top_drive", ""),
+            "top_pressure": p.get("top_pressure", 0.0),
+            "mood": p.get("mood", "unknown"),
+            "energy": p.get("energy", 1.0),
+            "available": p.get("available", False),
+        })
+    return {"enabled": True, "total": len(peers), "reachable": reachable, "peers": peers}
+
+
 def _get_learner_data() -> dict:
     """Read RL-lite feedback learner state from persisted JSON."""
     raw = _read_json("feedback_learner.json", {})
@@ -303,6 +335,16 @@ def get_learner(_: None = Depends(require_auth)):
     return _get_learner_data()
 
 
+@app.get("/state/peers")
+def get_peers(_: None = Depends(require_auth)):
+    """Multi-agent peer sync status — reachability, drive state, and AURA for each peer."""
+    try:
+        from pulse.src import peer_sync
+        return peer_sync.get_status()
+    except ImportError:
+        return {"enabled": False, "total": 0, "reachable": 0, "peers": []}
+
+
 # ── Chronicle ─────────────────────────────────────────────────────────────────
 
 
@@ -363,6 +405,7 @@ async def websocket_stream(ws: WebSocket):
                 "endocrine": _get_endocrine_data(),
                 "circadian": _get_circadian_data(),
                 "learner": _get_learner_data(),
+                "peers": _get_peers_data(),
                 "timestamp": time.time(),
             }
             await ws.send_json(state)
