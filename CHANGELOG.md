@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-03-09
+
+### Added
+- **GENOME v2 — Identity Bundle Export/Import** (Phase 5: Identity Portability)
+  - `export_genome_v2()`: captures full identity bundle — modules, phenotype snapshot, drive pressures/weights, RL-lite learned EMA multipliers, sensor health config
+  - `validate_genome_v2()`: schema validation with bounds checking on EMA [-1, 1] and multipliers [0.7, 1.3]
+  - `import_genome_v2()`: restores learned weights to FeedbackLearner with merge policy (overwrite or blend)
+    - `overwrite`: replace all learned EMAs with imported values (default)
+    - `blend`: average imported and current EMAs element-wise (for gradual personality migration)
+  - Backward-compatible: v1 genomes (no `schema_version`) still import via legacy path
+  - THALAMUS `import_v2` signal on successful import
+  - CLI: `pulse genome export` now outputs v2 by default; `--v1` flag for legacy format
+  - CLI: `pulse genome import FILE` auto-detects v1/v2; `--merge blend` for blended import
+  - 41 new tests across 8 test classes (export, identity, drives, learned weights, sensors, validation, import, round-trip)
+  - Schema version: `"2.0"` — discriminator field for v1/v2 detection
+
+### Changed
+- `pulse genome export` help text updated with v2 examples
+- Test suite: 1191 → 1231 passing
+
 ## [0.5.4] - 2026-03-09
 
 ### Added

@@ -959,12 +959,29 @@ def cmd_genome(args):
     sub = getattr(args, "genome_cmd", None) or "show"
 
     if sub == "export":
-        g = _read_genome()
+        use_v1 = getattr(args, "v1", False)
+        if use_v1:
+            g = _read_genome()
+        else:
+            from pulse.src.genome import export_genome_v2
+
+            g = export_genome_v2(state_dir=_DEFAULT_STATE_DIR)
         if getattr(args, "output", None):
             out = Path(args.output)
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(json.dumps(g, indent=2))
-            console.print(f"[green]✓[/] Genome exported → [bold]{out}[/]")
+            schema = g.get("schema_version", "1.0")
+            console.print(
+                f"[green]✓[/] Genome exported → [bold]{out}[/]  "
+                f"(schema v{schema})"
+            )
+            if not use_v1:
+                lw = g.get("learned_weights", {})
+                console.print(
+                    f"  Identity: {bool(g.get('identity', {}).get('phenotype'))}  │  "
+                    f"Drives: {len(g.get('drives', {}))}  │  "
+                    f"Learned: {len(lw)}"
+                )
         else:
             print(json.dumps(g, indent=2))
 
@@ -978,13 +995,47 @@ def cmd_genome(args):
         except json.JSONDecodeError as e:
             console.print(f"[red]✗[/] Invalid JSON: {e}")
             sys.exit(1)
-        if "modules" not in incoming:
-            console.print("[red]✗[/] Invalid genome: missing 'modules' key")
-            sys.exit(1)
-        _write_genome(incoming)
-        n = len(incoming.get("modules", {}))
-        console.print(f"[green]✓[/] Genome imported from [bold]{path}[/] — {n} modules")
-        console.print(f"  Version: {incoming.get('version', '?')}")
+
+        # Auto-detect v2 vs v1
+        is_v2 = incoming.get("schema_version") == "2.0"
+        merge_policy = getattr(args, "merge", "overwrite")
+
+        if is_v2:
+            from pulse.src.genome import import_genome_v2, validate_genome_v2
+
+            valid, errors = validate_genome_v2(incoming)
+            if not valid:
+                console.print("[red]✗[/] Invalid v2 genome:")
+                for err in errors:
+                    console.print(f"    • {err}")
+                sys.exit(1)
+            imported, warnings = import_genome_v2(
+                incoming, state_dir=_DEFAULT_STATE_DIR, merge_policy=merge_policy
+            )
+            n = len(imported.get("modules", {}))
+            lw = len(imported.get("learned_weights", {}))
+            console.print(
+                f"[green]✓[/] Genome v2 imported from [bold]{path}[/] — "
+                f"{n} modules, {lw} learned drives"
+            )
+            console.print(
+                f"  Pulse version: {imported.get('pulse_version', '?')}  │  "
+                f"Merge: {merge_policy}"
+            )
+            if warnings:
+                for w in warnings:
+                    console.print(f"  [dim]⚠ {w}[/]")
+        else:
+            if "modules" not in incoming:
+                console.print("[red]✗[/] Invalid genome: missing 'modules' key")
+                sys.exit(1)
+            _write_genome(incoming)
+            n = len(incoming.get("modules", {}))
+            console.print(
+                f"[green]✓[/] Genome v1 imported from [bold]{path}[/] — {n} modules"
+            )
+            console.print(f"  Version: {incoming.get('version', '?')}")
+
         if _is_running()[0]:
             console.print(
                 "  [dim]Note: restart daemon to apply changes: [bold]pulse restart[/][/]"
@@ -1065,9 +1116,11 @@ def cmd_genome(args):
 
         console.print(table)
         console.print()
-        console.print("  [dim]pulse genome export -o backup.json   # save a backup[/]")
-        console.print("  [dim]pulse genome import FILE              # restore[/]")
-        console.print("  [dim]pulse genome diff FILE                # compare[/]\n")
+        console.print("  [dim]pulse genome export -o backup.json   # v2 identity bundle (default)[/]")
+        console.print("  [dim]pulse genome export --v1 -o old.json # v1 modules-only[/]")
+        console.print("  [dim]pulse genome import FILE              # auto-detects v1/v2[/]")
+        console.print("  [dim]pulse genome import FILE --merge blend # blend learned weights[/]")
+        console.print("  [dim]pulse genome diff FILE                # compare modules[/]\n")
 
 
 def cmd_plugin(args):
@@ -1808,12 +1861,19 @@ def main():
         "genome", help="Export, import, or diff the Pulse genome (DNA config)"
     )
     g_sub = g_parser.add_subparsers(dest="genome_cmd")
-    g_export = g_sub.add_parser("export", help="Export current genome to JSON")
+    g_export = g_sub.add_parser("export", help="Export current genome to JSON (v2 identity bundle by default)")
     g_export.add_argument(
         "--output", "-o", metavar="FILE", help="Output file (default: stdout)"
     )
-    g_import = g_sub.add_parser("import", help="Import genome from a JSON file")
+    g_export.add_argument(
+        "--v1", action="store_true", help="Export v1 format (modules only, no identity/drives/learned weights)"
+    )
+    g_import = g_sub.add_parser("import", help="Import genome from a JSON file (auto-detects v1/v2)")
     g_import.add_argument("file", metavar="FILE", help="Path to genome JSON")
+    g_import.add_argument(
+        "--merge", choices=["overwrite", "blend"], default="overwrite",
+        help="Merge policy for learned weights: overwrite (default) or blend with current"
+    )
     g_diff = g_sub.add_parser(
         "diff", help="Compare current genome against a saved file"
     )
