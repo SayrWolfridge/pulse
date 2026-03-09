@@ -23,9 +23,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 41 new tests across 8 test classes (export, identity, drives, learned weights, sensors, validation, import, round-trip)
   - Schema version: `"2.0"` — discriminator field for v1/v2 detection
 
+- **COMPLIANCE.md — NIST AI RMF Alignment** (Phase 5: Compliance Documentation)
+  - Full NIST AI Risk Management Framework mapping (GOVERN / MAP / MEASURE / MANAGE)
+  - NIST AI Agent Standards Initiative (Feb 2026) six-property alignment table
+  - Security properties: zero outbound calls, credential handling, prompt injection surface, dependency audit
+  - Deployment guidance for regulated environments (finance, healthcare, legal)
+
+### Fixed
+- GERMINAL: in-progress check now runs before ceiling check — fixes false block reason when MAX_TOTAL_MODULES reached while birth in progress
+
 ### Changed
 - `pulse genome export` help text updated with v2 examples
-- Test suite: 1191 → 1231 passing
+- Test suite: 1191 → 1232 passing
 
 ## [0.5.4] - 2026-03-09
 
