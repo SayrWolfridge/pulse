@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-03-09
+
+### Added
+- **RL-lite Feedback Learner — Phase 4** (`src/feedback_learner.py`)
+  - Bandit-style adaptive learning: tracks feedback outcomes per drive in a rolling window
+  - EMA (Exponential Moving Average) scoring: α=0.15 balances responsiveness with stability
+  - Weight multiplier per drive: [0.7, 1.3] range — drives that consistently succeed get reinforced, underperforming drives self-correct
+  - MIN_WEIGHT_FLOOR (0.1) prevents any drive from going completely silent
+  - `FeedbackEvent` dataclass with outcome scoring: success (+1.0), partial (+0.3), blocked (0.0), failure (-1.0)
+  - State persisted to `feedback_learner.json` with atomic writes (tmp → rename) and corrupt-file recovery
+  - Wired into both feedback paths: HTTP `POST /feedback` (health.py) and file-based `turn_result.json` (daemon.py)
+  - `/status` endpoint now includes `learner` section with per-drive EMA, multiplier, event count, success rate
+  - Prometheus metrics: `pulse_learner_ema`, `pulse_learner_multiplier`, `pulse_learner_events`, `pulse_learner_success_rate` (all per-drive gauges)
+  - `get_stats()` API: schema with per-drive EMA, multiplier, event count, success_rate, last_outcome
+  - `reset_drive()`: clear history + EMA for a drive (e.g. after config change)
+  - `prometheus_lines()`: standalone text-format output for custom integrations
+  - 51 new tests across 10 test classes: FeedbackEvent (10), Record (8), WeightAdjustment (6), EffectiveWeight (5), Stats (6), ResetDrive (4), Persistence (5), PrometheusLines (3), Convergence (4)
+- **Test suite: 1081 → 1132 tests** (51 new)
+
 ## [0.5.1] - 2026-03-09
 
 ### Added

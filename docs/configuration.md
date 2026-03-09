@@ -535,6 +535,66 @@ All mutations are logged in `audit-log.jsonl`.
 
 ---
 
+## RL-lite Feedback Learning
+
+Pulse includes an adaptive feedback learner that adjusts drive weights based on observed outcomes. When you send feedback via `POST /feedback` or write `turn_result.json`, the learner records the event and updates an Exponential Moving Average (EMA) per drive.
+
+**How it works:**
+
+| Outcome | Score |
+|---------|-------|
+| `success` | +1.0 |
+| `partial` | +0.3 |
+| `blocked` |  0.0 |
+| `failure` | -1.0 |
+
+Each feedback event updates the drive's EMA: `new_ema = α × score + (1 - α) × old_ema` (default α = 0.15).
+
+The EMA maps to a weight multiplier in the range **[0.7, 1.3]** — drives with consistently good outcomes get up to 30% more weight; underperforming drives lose up to 30%. A floor of 0.1 prevents any drive from going completely silent.
+
+**Monitoring:**
+
+The `/status` endpoint includes a `learner` section:
+
+```json
+{
+  "learner": {
+    "drives": {
+      "goals": {
+        "ema": 0.4532,
+        "multiplier": 1.136,
+        "events": 12,
+        "success_rate": 0.8333,
+        "last_outcome": "success"
+      }
+    },
+    "total_events": 12
+  }
+}
+```
+
+Prometheus metrics are also exposed:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `pulse_learner_ema{drive}` | gauge | EMA score [-1, 1] |
+| `pulse_learner_multiplier{drive}` | gauge | Weight multiplier [0.7, 1.3] |
+| `pulse_learner_events{drive}` | gauge | Events in rolling window |
+| `pulse_learner_success_rate{drive}` | gauge | Fraction success+partial |
+
+**Tuning constants** (in `src/feedback_learner.py`):
+
+| Constant | Default | Description |
+|----------|---------|-------------|
+| `WINDOW` | 20 | Rolling events kept per drive |
+| `ALPHA` | 0.15 | EMA learning rate |
+| `MAX_ADJUSTMENT` | 0.30 | Max ±% weight shift |
+| `MIN_WEIGHT_FLOOR` | 0.10 | Absolute minimum effective weight |
+
+State persists to `<state_dir>/feedback_learner.json` and survives daemon restarts.
+
+---
+
 ## Next Steps
 
 - [Architecture](architecture.md) — how Pulse works

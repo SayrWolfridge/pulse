@@ -294,6 +294,52 @@ class PulseMetrics:
             instinct_samples,
         )
 
+        # ── pulse_learner_* ──────────────────────────────────
+        learner = getattr(daemon, "feedback_learner", None)
+        if learner is not None:
+            learner_stats = learner.get_stats().get("drives", {})
+            learner_ema_samples = [
+                ({"drive": name}, float(s["ema"]))
+                for name, s in learner_stats.items()
+            ] or [({"drive": "_none"}, 0.0)]
+            learner_mult_samples = [
+                ({"drive": name}, float(s["multiplier"]))
+                for name, s in learner_stats.items()
+            ] or [({"drive": "_none"}, 1.0)]
+            learner_ev_samples = [
+                ({"drive": name}, float(s["events"]))
+                for name, s in learner_stats.items()
+            ] or [({"drive": "_none"}, 0.0)]
+            learner_sr_samples = [
+                ({"drive": name}, float(s["success_rate"]))
+                for name, s in learner_stats.items()
+            ] or [({"drive": "_none"}, 0.0)]
+
+            lines += _metric_block(
+                "pulse_learner_ema",
+                "gauge",
+                "RL-lite EMA outcome score per drive. Range [-1, 1]; positive = reward.",
+                learner_ema_samples,
+            )
+            lines += _metric_block(
+                "pulse_learner_multiplier",
+                "gauge",
+                "RL-lite weight multiplier applied to drive weight. Range [0.7, 1.3].",
+                learner_mult_samples,
+            )
+            lines += _metric_block(
+                "pulse_learner_events",
+                "gauge",
+                "Number of feedback events in the rolling window per drive.",
+                learner_ev_samples,
+            )
+            lines += _metric_block(
+                "pulse_learner_success_rate",
+                "gauge",
+                "Fraction of feedback events with success or partial outcome per drive.",
+                learner_sr_samples,
+            )
+
         # Prometheus requires a trailing newline
         return "\n".join(lines) + "\n"
 

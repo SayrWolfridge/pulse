@@ -38,6 +38,7 @@ from pulse.src.instincts import InstinctExecutor, InstinctRegistry
 from pulse.src.integrations import Integration
 from pulse.src.nervous_system import NervousSystem
 from pulse.src.germinal_tasks import generate_tasks as germinal_generate
+from pulse.src.feedback_learner import FeedbackLearner
 
 logger = logging.getLogger("pulse")
 
@@ -106,6 +107,9 @@ class PulseDaemon:
             if instincts_dir.exists():
                 self.instinct_registry = InstinctRegistry(instincts_dir)
                 self.instinct_executor = InstinctExecutor()
+
+        # RL-lite feedback learner (Phase 4)
+        self.feedback_learner = FeedbackLearner(self.config.state.dir)
 
         # Event bus for decoupled side effects
         self.bus = EventBus()
@@ -581,6 +585,14 @@ class PulseDaemon:
 
                     drive.decay(decay_amount)
                     drive.last_addressed = now
+
+                    # RL-lite: record and apply learner adjustment
+                    self.feedback_learner.record(
+                        drive_name, drive.pressure, outcome
+                    )
+                    drive.weight = self.feedback_learner.effective_weight(
+                        drive_name, drive.weight
+                    )
 
             logger.info(
                 f"Feedback file processed: {outcome} — {drives_addressed} — {summary[:60]}"

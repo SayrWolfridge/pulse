@@ -129,6 +129,11 @@ class HealthServer:
                     ),
                 },
                 "evaluator": evaluator_info,
+                "learner": (
+                    self.daemon.feedback_learner.get_stats()
+                    if hasattr(self.daemon, "feedback_learner")
+                    else None
+                ),
                 "version": __version__,
             }
         )
@@ -187,10 +192,21 @@ class HealthServer:
 
                 drive.decay(decay_amount)
                 drive.last_addressed = now
+
+                # RL-lite: record event and apply adjusted weight
+                if hasattr(self.daemon, "feedback_learner"):
+                    self.daemon.feedback_learner.record(
+                        drive_name, before, outcome
+                    )
+                    drive.weight = self.daemon.feedback_learner.effective_weight(
+                        drive_name, drive.weight
+                    )
+
                 results[drive_name] = {
                     "before": round(before, 4),
                     "after": round(drive.pressure, 4),
                     "decayed": round(decay_amount, 4),
+                    "weight": round(drive.weight, 4),
                 }
 
         # Persist immediately
