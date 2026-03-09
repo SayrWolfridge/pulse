@@ -1,18 +1,36 @@
-# Pulse Configuration
-# Copy to pulse.yaml and customize
+# Pulse Configuration Example
+# Copy this file to config/pulse.yaml and customize for your agent.
+# All fields shown with recommended defaults for a new installation.
 
-# OpenClaw connection
+# ─── OpenClaw Connection ─────────────────────────────────────────────────────
 openclaw:
+  # Your agent's webhook URL (from `openclaw status`)
   webhook_url: "http://127.0.0.1:18789/hooks/agent"
-  webhook_token: "${OPENCLAW_HOOKS_TOKEN}"
-  # Default message prefix for self-initiated turns
+  # Token from your openclaw.json hooks config
+  webhook_token: "${PULSE_HOOK_TOKEN}"
+  # Text prepended to every self-initiated turn so the agent knows it's Pulse
   message_prefix: "[PULSE]"
-  # Max agent turns per hour (rate limiting)
+  # Cap on autonomous turns per hour (rate limiting)
   max_turns_per_hour: 10
-  # Cooldown between triggers (seconds)
-  min_trigger_interval: 300
+  # Minimum seconds between consecutive triggers
+  min_trigger_interval: 1200
 
-# Agent workspace paths (relative to workspace root)
+  # Session mode:
+  #   "main"     — injects directly into the running main session (simpler, but
+  #                interrupts human conversations)
+  #   "isolated" — spawns a separate session per turn (recommended; keeps
+  #                autonomous work from derailing chats)
+  session_mode: "isolated"
+
+  # In isolated mode, post the result back to the source channel when done
+  deliver: true
+
+  # Model used for isolated sessions. Keep this fast/cheap — Pulse fires often.
+  isolated_model: "anthropic/claude-sonnet-4-6"
+
+# ─── Agent Workspace Paths ───────────────────────────────────────────────────
+# Paths Pulse reads to understand agent state. Relative paths are resolved
+# against workspace.root.
 workspace:
   root: "~/.openclaw/workspace"
   goals: "scripts/goals.py"
@@ -25,48 +43,48 @@ workspace:
   evolution: "memory/self/evolution.json"
   daily_notes: "memory/"
 
-# Drive engine
+# ─── Drive Engine ────────────────────────────────────────────────────────────
 drives:
-  # How fast unfulfilled drives accumulate pressure (per minute)
+  # Pressure accumulation rate (per minute when a drive is unfulfilled)
   pressure_rate: 0.01
-  # Threshold to trigger an agent turn
+  # Pressure at which a drive becomes eligible to trigger an agent turn
   trigger_threshold: 0.7
-  # Maximum pressure (caps accumulation)
-  max_pressure: 1.0
-  # Pressure decay after a successful turn
+  # Pressure ceiling per drive
+  max_pressure: 5.0
+  # How much pressure drops after a successful turn
   success_decay: 0.5
-  # Pressure boost on failure/frustration
+  # How much pressure rises after a failed/blocked turn
   failure_boost: 0.2
-  # Minimum individual weighted_pressure for high-pressure override to fire
-  # Prevents override on ambient noise from many low-floor drives
-  override_min_individual_pressure: 1.5
-  # Scale success_decay proportionally when total pressure > 5.0
-  adaptive_decay: true
-  
-  # Drive categories and their base weights
+
+  # Drive categories: tune weight to reflect agent priorities.
+  # weight controls how much this drive influences the combined trigger score.
   categories:
     goals:
-      weight: 1.0
+      weight: 1.0          # Primary motivator — active project progress
       source: "goals"
     curiosity:
-      weight: 0.6
+      weight: 0.6          # Research, exploration, learning
       source: "curiosity"
     emotions:
-      weight: 0.8
+      weight: 0.8          # Processing emotional state (journal writing, reflection)
       source: "emotions"
     unfinished:
-      weight: 0.9
+      weight: 0.9          # Open hypotheses, incomplete tasks
       source: "hypotheses"
     social:
-      weight: 0.4
+      weight: 0.4          # Channel silence, unreplied mentions
       source: "sensors.discord"
     growth:
-      weight: 0.5
+      weight: 0.5          # Evolution milestones, skill development
       source: "evolution"
 
-# Sensors
+# ─── Sensors ─────────────────────────────────────────────────────────────────
+# Sensors feed environmental data into the drive engine.
+# Each sensor spikes one or more drives when conditions are met.
 sensors:
-  # File system watcher
+
+  # Filesystem — watches for new/changed files in key directories.
+  # Spikes: growth drive on new memory entries, curiosity on knowledge changes.
   filesystem:
     enabled: true
     watch_paths:
@@ -76,30 +94,48 @@ sensors:
       - "*.pyc"
       - "__pycache__"
       - ".git"
-    # Only trigger on external changes (not our own writes)
+    # Only react to external writes (ignore changes Pulse itself makes)
     ignore_self_writes: true
 
-  # Discord — silence detection in agent channels
-  # Spikes: social drive
+  # Discord — silence detection in agent channels.
+  # Spikes: social drive when a channel goes quiet.
   discord:
     enabled: false
     channels: []
-    # Alert if channel silent for N minutes (spike social drive)
-    silence_threshold_minutes: 60
-    request_timeout: 10
+    # Example:
+    # channels:
+    #   - id: "1234567890"
+    #     name: "pulse-log"
+    # Minutes of silence before social drive spikes
+    silence_threshold_minutes: 180
 
-  # X / Twitter — @mention silence detection
-  # Spikes: social drive
-  twitter:
+  # Web monitors — HTTP health checks and uptime monitoring.
+  # Spikes: system drive on status change or failures.
+  web:
     enabled: false
-    username: ""                          # your X handle without @
-    silence_threshold_minutes: 360        # 6 hours — X moves slower than Discord
-    bearer_token_env: "TWITTER_BEARER_TOKEN"  # env var holding Twitter API v2 Bearer Token
-    max_results: 10
-    request_timeout: 15
+    monitors: []
+    # Example:
+    # monitors:
+    #   - name: "Weather Bot"
+    #     url: "http://localhost:8080/health"
+    #     interval_seconds: 300
+    #     alert_on: "status_change"   # "status_change" | "always" | "failure_only"
 
-  # Git — uncommitted work, untracked files, stale pushes
-  # Spikes: goals drive (uncommitted/stale), growth drive (commits behind)
+  # System health — memory pressure and process watchdog.
+  # Spikes: system drive when thresholds are breached or processes die.
+  system:
+    enabled: true
+    # Spike system drive when RAM usage exceeds this percentage
+    memory_threshold_percent: 85
+    # List of process names to monitor (alert if not running)
+    watch_processes: []
+    # Example:
+    # watch_processes:
+    #   - "weather_bot"
+    #   - "pulse"
+
+  # Git — uncommitted work and stale push detection.
+  # Spikes: goals drive (uncommitted/stale), growth drive (commits behind remote).
   git:
     enabled: false
     repos: []
@@ -107,120 +143,122 @@ sensors:
     # repos:
     #   - "~/.openclaw/workspace"
     #   - "~/.openclaw/workspace/pulse"
-    stale_push_minutes: 120    # spike goals if last push > 2 hrs ago AND changes exist
-    fetch_remote: false        # set true to detect commits_behind (adds latency)
-    request_timeout: 10
 
-  # Web (RSS / Atom feeds) — new content detection
-  # Spikes: curiosity drive
-  web:
-    enabled: false
-    feeds: []
-    # Example:
-    # feeds:
-    #   - "https://hnrss.org/frontpage"
-    #   - "https://openai.com/blog/rss"
-    check_interval_minutes: 30    # minimum gap between polls per feed
-    max_items_per_feed: 20        # cap new items counted per check
-    request_timeout: 15
-
-  # Calendar — upcoming event awareness
-  # Spikes: unfinished drive (stronger when event is imminent)
-  calendar:
-    enabled: false
-    backend: "auto"             # "auto" | "macos" | "ics"
-    ics_paths: []               # paths to .ics files (for "ics" backend or "auto" fallback)
-    lookahead_minutes: 120      # look ahead 2 hours for events
-    imminent_threshold_minutes: 30  # events within 30 min = imminent
-    check_interval_minutes: 5
-    request_timeout: 5
-
-  # System health
-  system:
-    enabled: true
-    check_interval_seconds: 60
-    # Warn if Pulse daemon uses > N MB
-    memory_threshold_mb: 100
-    # Warn if < N GB free disk
-    disk_threshold_gb: 5
-
-# Priority evaluator
+# ─── Priority Evaluator ──────────────────────────────────────────────────────
 evaluator:
-  # Mode: "rules" (default, zero dependencies) or "model" (smarter, needs an LLM endpoint)
+  # "rules" — zero dependencies, always available (recommended default)
+  # "model" — smarter prioritisation via an LLM (see model block below)
   mode: "rules"
-  
-  # Rules-based evaluation
+
   rules:
-    # Trigger if any single drive exceeds threshold
-    single_drive_threshold: 0.8
-    # Trigger if combined weighted pressure exceeds threshold  
-    combined_threshold: 0.7
-    # Suppress triggers during human conversation (detect recent messages)
+    # Fire a turn when any single drive's weighted pressure exceeds this
+    single_drive_threshold: 1.2
+    # Fire a turn when combined weighted pressure across all drives exceeds this
+    combined_threshold: 1.5
+    # Suppress autonomous turns while a human conversation is active
     suppress_during_conversation: true
+    # Grace period after last human message before Pulse can fire again (minutes)
     conversation_cooldown_minutes: 5
 
-  # Model-based evaluation (opt-in, set mode: "model" to enable)
-  # Uses any OpenAI-compatible API — zero vendor lock-in
+  # Model-based evaluation — uses any OpenAI-compatible endpoint.
+  # Enables smarter suppression decisions ("is now a good time to act?")
   model:
-    # Ollama (local, free, private — recommended)
+    # Local Ollama (free, private, recommended for model mode)
     base_url: "http://127.0.0.1:11434/v1"
     api_key: "ollama"
-    model: "llama3.2:3b"
-    # # OpenAI
+    model: "qwen2.5:7b"
+    # OpenAI alternative:
     # base_url: "https://api.openai.com/v1"
     # api_key: "${OPENAI_API_KEY}"
     # model: "gpt-4o-mini"
-    # # Groq (fast, free tier)
+    # Groq alternative (fast free tier):
     # base_url: "https://api.groq.com/openai/v1"
     # api_key: "${GROQ_API_KEY}"
     # model: "llama-3.1-8b-instant"
-    # # Together, Fireworks, any OpenAI-compatible endpoint works
     max_tokens: 512
     temperature: 0.3
-    timeout_seconds: 10
-    # Cap on model-requested suppress_minutes (default was 10, raised to 30)
-    max_suppress_minutes: 30
+    timeout_seconds: 120
 
-# State persistence
-state:
-  dir: "~/.pulse/state"
-  # How often to save state (seconds)
-  save_interval: 60
-  # Keep history of drive states for analysis
-  history_retention_days: 30
+# ─── Instincts ───────────────────────────────────────────────────────────────
+# Instincts are lightweight drive-triggered scripts that run before the full
+# agent turn (GENERATE step). Use them for fast, deterministic reactions:
+# e.g., git commit if goals pressure is high and there are uncommitted changes.
+instincts:
+  enabled: true
+  # Directory containing instinct scripts (relative to workspace root)
+  instincts_dir: "instincts"
+  # Run instincts before the GENERATE step (prevents redundant LLM turns)
+  fire_before_generate: true
 
-# Logging
-logging:
-  level: "INFO"
-  file: "~/.pulse/logs/pulse.log"
-  # Also log to OpenClaw daily notes
-  sync_to_daily_notes: true
+# ─── World Model (PARIETAL) ──────────────────────────────────────────────────
+# PARIETAL scans the workspace, infers which projects are active, and builds
+# dynamic sensors automatically. Replaces manual sensor configuration for
+# complex workspaces with many evolving projects.
+parietal:
+  enabled: true
+  # How often to re-scan the workspace for new/changed projects (hours)
+  scan_interval_hours: 6
+  workspace_root: "~/.openclaw/workspace"
+  # Use an LLM to infer project health signals (recommended; falls back to
+  # heuristics if no model is available)
+  use_llm_inference: true
+  # Caps on auto-discovery (prevents overwhelming the sensor registry)
+  max_projects: 50
+  max_sensors_per_project: 5
+  # Directories to skip during scanning
+  ignored_dirs:
+    - ".git"
+    - "node_modules"
+    - "__pycache__"
+    - "venv"
+    - ".venv"
+    - "dist"
+    - "build"
 
-# Generative task synthesis (GENERATE step)
-# When all work is blocked on external dependencies but drives are still high,
-# Pulse synthesizes new tasks from goals + drives + memory + roadmap.
-# Works with zero config — roadmap files are optional enhancements.
+# ─── Generative Task Synthesis ───────────────────────────────────────────────
+# When all active work is blocked on external dependencies but drives are still
+# high, GENERATE synthesises new tasks from goals + drives + memory + roadmap.
+# Works with zero config — roadmap files are optional context enrichment.
 generative:
   enabled: true
-  # Optional roadmap files to enhance task generation (read if present, ignored if not)
+  # Optional roadmap files loaded as context during task generation
   roadmap_files:
     - "TIERS.md"
     - "ROADMAP.md"
     - "TODO.md"
-  # Max tasks to generate per cycle
+  # Maximum tasks to propose per GENERATE cycle
   max_tasks: 3
-  # Auto-add generated tasks to goals list (false = suggest only)
+  # Automatically append generated tasks to the goals list
   auto_add_to_goals: false
-  # Minimum idle time before GENERATE fires (minutes)
-  min_idle_minutes: 15
+  # Minimum idle time (minutes) before GENERATE fires
+  min_idle_minutes: 45
 
-# Daemon settings
+# ─── State Persistence ───────────────────────────────────────────────────────
+state:
+  dir: "~/.pulse/state"
+  # How often to flush state to disk (seconds)
+  save_interval: 60
+  # Retain drive history for analysis and RL-lite learning
+  history_retention_days: 30
+
+# ─── Logging ─────────────────────────────────────────────────────────────────
+logging:
+  level: "INFO"           # DEBUG | INFO | WARNING | ERROR
+  file: "~/.pulse/logs/pulse.log"
+  # Mirror log entries to the agent's OpenClaw daily notes file
+  sync_to_daily_notes: true
+
+# ─── Daemon Settings ─────────────────────────────────────────────────────────
 daemon:
-  # Main loop interval (how often to evaluate drives)
-  loop_interval_seconds: 30
-  # Graceful shutdown timeout
+  # Main evaluation loop interval (seconds between drive checks)
+  loop_interval_seconds: 120
+  # Graceful shutdown timeout (seconds)
   shutdown_timeout: 10
-  # PID file for process management
+  # PID file location
   pid_file: "~/.pulse/pulse.pid"
-  # Health endpoint port (GET /health, GET /status)
+  # HTTP health/metrics/observation server port
   health_port: 9720
+  # Integration preset:
+  #   "default"  — generic CORTEX loop for any OpenClaw agent
+  #   "iris"     — enables OPERATIONS.md + hippocampus context injection
+  integration: "default"
