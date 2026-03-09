@@ -6,11 +6,18 @@ Pulse is a persistent daemon that gives AI agents self-directed initiative. Inst
 
 Built for [OpenClaw](https://openclaw.ai), portable across any deployment.
 
-**867 tests** · Python 3.11+ · MIT License · Docker-ready
+**900 tests** · Python 3.11+ · MIT License · Docker-ready · v0.5.0
 
 ---
 
 ## Features
+
+⚡ **Instincts — Autonomous Skill System** *(v0.5.0)*
+- Drop a folder into `instincts/` and Pulse runs it automatically when the right drives spike
+- YAML frontmatter spec: declare which drives trigger the skill, cooldown, timeout, output routing
+- Deterministic-first: Instincts fire *before* LLM synthesis — reliable expert behavior on demand
+- Ships with 3 built-in instincts: weather market scan, memory maintenance, X engagement
+- Build custom instincts in any language — Pulse just runs the script
 
 🧠 **Autonomous Cognition**
 - Drive engine with 6 built-in motivation categories (goals, curiosity, emotions, learning, social, system)
@@ -101,6 +108,42 @@ openclaw:
 
 ---
 
+## Instincts — Build Your Own Autonomous Skills
+
+Drop a folder into `pulse/instincts/` and your agent runs it automatically when drives spike:
+
+```
+instincts/
+  my-skill/
+    INSTINCT.md     ← trigger spec (YAML frontmatter)
+    run.py          ← your script
+```
+
+**`INSTINCT.md` example:**
+
+```yaml
+---
+name: my-skill
+description: Checks for new opportunities when curiosity spikes
+triggers:
+  drives:
+    curiosity: 2.5
+    goals: 1.5
+  context:
+    time_of_day: any
+cooldown_minutes: 60
+timeout_seconds: 120
+output:
+  discord_channel: pulse-log
+---
+```
+
+Then write `run.py` — any language, any logic. Pulse runs it, captures stdout, routes output to Discord/Signal/log.
+
+See [INSTINCT_SPEC.md](INSTINCT_SPEC.md) for the full spec and [instincts/](instincts/) for built-in examples.
+
+---
+
 ## Use Cases
 
 1. **Personal AI assistant** — proactive memory maintenance, goal tracking, creative prompts
@@ -144,6 +187,14 @@ openclaw:
       └─────────┬────────────┘
                 │
                 ▼
+  ┌─────────────────────────────┐
+  │  INSTINCTS (v0.5.0)         │
+  │  Drive-matched skill files  │
+  │  Run deterministically,     │
+  │  before LLM synthesis       │
+  └──────────┬──────────────────┘
+             │  (if no instinct matched)
+             ▼
      ┌──────────────────────────┐
      │  WEBHOOK → OpenClaw      │
      │  "Run your CORTEX loop"  │
@@ -158,13 +209,15 @@ openclaw:
 - Drive engine + sensors + evaluator
 - State persistence + migrations
 - Self-modification system
-- Health monitoring
+- Health monitoring (`pulse doctor`)
+- CORTEX_EXT learning-gap detector
 
-### Phase 2: Polish (Current)
-- Documentation
+### Phase 2: Instincts + Launch ✅
+- Instincts system — drive-triggered autonomous skills (v0.5.0)
+- Documentation hardening
 - Example configs
-- ClawHub submission
-- Product Hunt launch
+- ClawHub submission *(next)*
+- Product Hunt launch *(next)*
 
 ### Phase 3: Integrations
 - Discord sensor (channel silence detection)
