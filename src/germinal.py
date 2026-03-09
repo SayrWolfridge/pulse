@@ -245,14 +245,14 @@ def attempt_birth(drive_name: str) -> dict:
         remaining = (state["cooldown_until"] - now) / 3600
         return {"ok": False, "reason": f"cooldown ({remaining:.1f}h remaining)"}
 
+    # Check not already in progress (before ceiling — in-progress is more specific)
+    if state.get("in_progress"):
+        return {"ok": False, "reason": "birth already in progress"}
+
     # Check module ceiling
     existing = list(PULSE_SRC.glob("*.py"))
     if len(existing) >= MAX_TOTAL_MODULES:
         return {"ok": False, "reason": f"module ceiling reached ({MAX_TOTAL_MODULES})"}
-
-    # Check not already in progress
-    if state.get("in_progress"):
-        return {"ok": False, "reason": "birth already in progress"}
 
     archetype = get_archetype(drive_name)
     spec = build_module_spec(drive_name, archetype)
