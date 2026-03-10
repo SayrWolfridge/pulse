@@ -96,6 +96,23 @@ class DriveEngine:
                 weight=cat.weight,
             )
 
+        # Snapshot of original config-defined base weights.
+        # Used by the RL feedback learner to compute effective weight adjustments
+        # without compounding on already-adjusted values (which causes exponential drift).
+        self._config_weights: Dict[str, float] = {
+            name: cat.weight
+            for name, cat in config.drives.categories.items()
+        }
+
+    def config_weight(self, drive_name: str) -> float:
+        """Return the original config-defined base weight for a drive.
+        
+        Falls back to 1.0 for runtime-added drives (mutations) that have
+        no config entry. This is intentionally conservative — never returns
+        an accumulated/drifted value.
+        """
+        return self._config_weights.get(drive_name, 1.0)
+
     def tick(self, sensor_data: dict) -> DriveState:
         """
         Update all drives. Called every loop iteration.

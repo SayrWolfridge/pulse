@@ -586,12 +586,19 @@ class PulseDaemon:
                     drive.decay(decay_amount)
                     drive.last_addressed = now
 
-                    # RL-lite: record and apply learner adjustment
+                    # RL-lite: record and apply learner adjustment.
+                    # IMPORTANT: always pass the *config base weight* (not
+                    # drive.weight) to effective_weight(). Passing drive.weight
+                    # here caused exponential weight drift: each feedback call
+                    # multiplied the already-adjusted weight by the learner
+                    # multiplier again, producing weights in the hundreds or
+                    # thousands after ~30 failure cycles (1.3^27 ≈ 994×).
                     self.feedback_learner.record(
                         drive_name, drive.pressure, outcome
                     )
+                    config_base = self.drive_engine.config_weight(drive_name)
                     drive.weight = self.feedback_learner.effective_weight(
-                        drive_name, drive.weight
+                        drive_name, config_base
                     )
 
             logger.info(
