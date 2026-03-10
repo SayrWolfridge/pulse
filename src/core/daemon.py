@@ -577,7 +577,7 @@ class PulseDaemon:
                     if drive_name in decay_overrides:
                         decay_amount = float(decay_overrides[drive_name])
                     elif outcome == "success":
-                        decay_amount = min(drive.pressure, drive.pressure * 0.7)
+                        decay_amount = min(drive.pressure, drive.pressure * 0.85)
                     elif outcome == "partial":
                         decay_amount = min(drive.pressure, drive.pressure * 0.4)
                     else:

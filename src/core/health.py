@@ -181,8 +181,8 @@ class HealthServer:
                     decay_amount = float(decay_overrides[drive_name])
                 elif outcome == "success":
                     decay_amount = min(
-                        drive.pressure, drive.pressure * 0.7
-                    )  # 70% decay
+                        drive.pressure, drive.pressure * 0.85
+                    )  # 85% decay — drops 5.0→0.75, below trigger_threshold 1.2
                 elif outcome == "partial":
                     decay_amount = min(
                         drive.pressure, drive.pressure * 0.4
