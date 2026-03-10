@@ -80,7 +80,7 @@ class OpenClawWebhook:
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
-                if resp.status == 202:
+                if resp.status in (200, 202):
                     run_id = None
                     try:
                         body = await resp.json()
