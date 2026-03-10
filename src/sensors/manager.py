@@ -372,6 +372,10 @@ class SystemSensor(BaseSensor):
         alerts = []
 
         # Memory pressure check (macOS) — async
+        # Uses vm_stat and counts ALL reclaimable pages (free + inactive + speculative +
+        # purgeable) as "available" memory, not just Pages free alone. macOS aggressively
+        # uses free RAM as disk cache; "Pages inactive" can always be reclaimed on demand,
+        # so treating only "Pages free" as available produces catastrophically wrong alerts.
         try:
             proc = await asyncio.create_subprocess_exec(
                 "vm_stat",
@@ -386,19 +390,49 @@ class SystemSensor(BaseSensor):
                     m = re.search(r"page size of (\d+)", lines[0])
                     if m:
                         page_size = int(m.group(1))
+
+                # Collect page counts for all reclaimable categories
+                page_counts: dict[str, int] = {}
                 for line in lines:
-                    if "Pages free" in line:
-                        free_pages = int(line.split(":")[1].strip().rstrip("."))
-                        free_mb = (free_pages * page_size) / (1024 * 1024)
-                        if free_mb < 200:
-                            alerts.append(
-                                {
-                                    "type": "memory_pressure",
-                                    "free_mb": round(free_mb),
-                                    "severity": "high",
-                                }
-                            )
+                    for key in ("Pages free", "Pages inactive", "Pages speculative", "Pages purgeable"):
+                        if line.strip().startswith(key):
+                            try:
+                                val = int(line.split(":")[1].strip().rstrip("."))
+                                page_counts[key] = val
+                            except (ValueError, IndexError):
+                                pass
+
+                if page_counts:
+                    available_pages = sum(page_counts.values())
+                    available_mb = (available_pages * page_size) / (1024 * 1024)
+                    free_mb = (page_counts.get("Pages free", 0) * page_size) / (1024 * 1024)
+                    # Only alert when truly available (reclaimable) memory is low — threshold 500MB
+                    if available_mb < 500:
+                        alerts.append(
+                            {
+                                "type": "memory_pressure",
+                                "free_mb": round(free_mb),
+                                "available_mb": round(available_mb),
+                                "severity": "critical" if available_mb < 200 else "high",
+                            }
+                        )
         except (asyncio.TimeoutError, OSError):
+            pass
+
+        # Disk free check — uses shutil for cross-platform correctness
+        try:
+            import shutil
+            usage = shutil.disk_usage("/")
+            disk_free_gb = usage.free / (1024 ** 3)
+            if disk_free_gb < 5.0:
+                alerts.append(
+                    {
+                        "type": "disk_space_low",
+                        "disk_free_gb": round(disk_free_gb, 2),
+                        "severity": "critical" if disk_free_gb < 2.0 else "high",
+                    }
+                )
+        except OSError:
             pass
 
         # Process health check — async
