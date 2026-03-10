@@ -193,13 +193,19 @@ class HealthServer:
                 drive.decay(decay_amount)
                 drive.last_addressed = now
 
-                # RL-lite: record event and apply adjusted weight
+                # RL-lite: record event and apply adjusted weight.
+                # IMPORTANT: always pass the *config base weight* (not drive.weight)
+                # to effective_weight(). Passing drive.weight causes exponential
+                # drift: each call multiplies the already-adjusted weight by the
+                # learner multiplier again (e.g. 1.3^27 ≈ 994× — same bug that
+                # was fixed in daemon._process_feedback_file in March 2026).
                 if hasattr(self.daemon, "feedback_learner"):
                     self.daemon.feedback_learner.record(
                         drive_name, before, outcome
                     )
+                    config_base = self.daemon.drives.config_weight(drive_name)
                     drive.weight = self.daemon.feedback_learner.effective_weight(
-                        drive_name, drive.weight
+                        drive_name, config_base
                     )
 
                 results[drive_name] = {

@@ -299,12 +299,19 @@ class DriveEngine:
             )
 
     def restore_state(self):
-        """Restore drive pressures and runtime-added drives from persisted state."""
+        """Restore drive pressures and runtime-added drives from persisted state.
+
+        NOTE: drive.weight is intentionally NOT restored from persisted state.
+        Weights are always re-derived from config + FeedbackLearner on each
+        feedback cycle. Restoring persisted weights caused exponential drift
+        because drifted values would compound across daemon restarts.
+        (Fixed March 2026 — same root cause as health.py and daemon.py bugs.)
+        """
         saved = self.state.get("drives", {})
         for name, data in saved.items():
             if name in self.drives:
                 self.drives[name].pressure = data.get("pressure", 0.0)
-                self.drives[name].weight = data.get("weight", self.drives[name].weight)
+                # weight deliberately skipped — always use config_weight()
                 self.drives[name].last_addressed = data.get("last_addressed", 0.0)
             else:
                 # Restore runtime-added drives (from mutations)
