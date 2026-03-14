@@ -1,7 +1,7 @@
 """
 ThoughtLoop — Pulse v2 Day 4
 ==============================
-Between-message cognitive processing using iris-70b (local Ollama, $0 cost).
+Between-message cognitive processing using Iris v4 (local Ollama, $0 cost).
 
 Runs every 5 minutes when idle. Backs off during active Pulse sessions.
 Three cycle types rotate: reflect → plan → compress (daily).
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import hashlib
 import logging
 import threading
 import time
@@ -41,7 +42,7 @@ PLAN_CYCLE_INTERVAL = 3            # Plan every 3rd cycle
 COMPRESS_CYCLE_INTERVAL = 12       # Compress every 12th cycle (~1 hour)
 OLLAMA_HOST = "127.0.0.1"
 OLLAMA_PORT = 11434
-OLLAMA_MODEL = "iris-70b"
+OLLAMA_MODEL = "iris-70b-v4:latest"
 OLLAMA_TIMEOUT = 60                # seconds
 
 
@@ -73,6 +74,8 @@ class OllamaClient:
         prompt: str,
         max_tokens: int = MAX_REFLECT_TOKENS,
         system: Optional[str] = None,
+        *,
+        temperature: Optional[float] = None,
     ) -> Optional[str]:
         """
         Send a generation request to Ollama.
@@ -84,7 +87,7 @@ class OllamaClient:
             "stream": False,
             "options": {
                 "num_predict": max_tokens,
-                "temperature": 0.7,
+                "temperature": 0.7 if temperature is None else float(temperature),
             },
         }
         if system:
@@ -204,7 +207,7 @@ class ThoughtLoop:
     """
     Background cognitive processor.
 
-    Runs between Pulse sessions using iris-70b (Ollama, local, $0).
+    Runs between Pulse sessions using Iris v4 local (Ollama, $0).
     Three rotation types:
       - reflect  (every cycle): review recent events → generate insight
       - plan     (every 3 cycles): review open loops → update priorities
@@ -386,7 +389,7 @@ class ThoughtLoop:
 
     def _reflect(self, dream_mode: bool = False) -> Optional[str]:
         """
-        Pull recent hot-tier events → prompt iris-70b → return insight.
+        Pull recent hot-tier events → prompt local model → return insight.
         Dream mode: deeper synthesis, more introspective prompt.
         """
         try:
@@ -430,7 +433,7 @@ class ThoughtLoop:
 
     def _plan(self) -> list[dict]:
         """
-        Pull open loops + active projects → prompt iris-70b → return priority list.
+        Pull open loops + active projects → prompt local model → return priority list.
         Falls back to returning existing loops unchanged if Ollama unavailable.
         """
         try:
@@ -448,6 +451,27 @@ class ThoughtLoop:
             # (But if GoalEngine exists, it counts as plan input.)
             if not open_loops and not projects and not goals_summary:
                 return []
+
+            # Plan gating: don't burn tokens if plan inputs haven't changed.
+            # Allows a periodic refresh (default: 1 hour) in case priorities drift.
+            source_hash = None
+            try:
+                blob = json.dumps(
+                    {
+                        "open_loops": open_loops,
+                        "projects": projects,
+                        "goals": goals_summary,
+                    },
+                    sort_keys=True,
+                    default=str,
+                ).encode("utf-8")
+                source_hash = hashlib.sha256(blob).hexdigest()
+                last_hash = self.state.get("thought_loop.last_plan_hash")
+                last_ts = float(self.state.get("thought_loop.last_plan_ts") or 0)
+                if last_hash == source_hash and last_ts and (time.time() - last_ts) < 3600:
+                    return open_loops
+            except Exception as _hex:
+                logger.debug("Plan gating hash failed (non-fatal): %s", _hex)
 
             prompt = _build_plan_prompt(open_loops, projects, goals_summary=goals_summary)
 
@@ -468,13 +492,40 @@ class ThoughtLoop:
                 except Exception as _eexc:
                     logger.debug("EpisodicBuffer context_narrative failed: %s", _eexc)
 
-            response = self.ollama.generate(prompt, max_tokens=MAX_PLAN_TOKENS, system=_PLAN_SYSTEM)
+            response = self.ollama.generate(
+                prompt,
+                max_tokens=MAX_PLAN_TOKENS,
+                system=_PLAN_SYSTEM,
+                temperature=0.25,
+            )
 
             if not response:
                 return open_loops  # unchanged
 
             # Try to parse JSON response
-            return _parse_plan_response(response, open_loops)
+            parsed = _parse_plan_response(response, open_loops)
+
+            # If parse failed, retry once at temperature=0 for strict JSON.
+            if parsed is open_loops:
+                retry = self.ollama.generate(
+                    prompt,
+                    max_tokens=MAX_PLAN_TOKENS,
+                    system=_PLAN_SYSTEM,
+                    temperature=0.0,
+                )
+                if retry:
+                    parsed = _parse_plan_response(retry, open_loops)
+
+            # Persist plan metadata (non-fatal).
+            try:
+                if source_hash:
+                    self.state.set("thought_loop.last_plan_hash", source_hash)
+                    self.state.set("thought_loop.last_plan_ts", time.time())
+                    self.state.set("thought_loop.last_plan_json_ok", parsed is not open_loops)
+            except Exception:
+                pass
+
+            return parsed
         except Exception as exc:  # noqa: BLE001
             logger.warning("_plan error: %s", exc)
             return []
@@ -567,7 +618,7 @@ def _date_to_ts(date_str: str) -> float:
 
 def _parse_plan_response(response: str, fallback: list[dict]) -> list[dict]:
     """
-    Parse iris-70b plan response.
+    Parse local model plan response.
     Expects JSON array: [{"project": "...", "next_action": "...", "priority": 0.9}]
     Falls back to original loops on parse failure.
     """

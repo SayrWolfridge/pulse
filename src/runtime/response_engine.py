@@ -1,7 +1,7 @@
 """
 ResponseEngine — Pulse v2 Day 14
 ===================================
-Closes the runtime loop: message → assembled context → iris-70b → reply.
+Closes the runtime loop: message → assembled context → local model → reply.
 
 This is the layer Anima's frontend calls.  All cognitive engines feed in,
 one personality-consistent response comes out.
@@ -11,7 +11,7 @@ Pipeline
 1. Assemble cognitive context (ContextAssembler, compact or standard format).
 2. Build a personality-grounded system prompt from SelfModel + NarrativeEngine
    + EmotionEngine — so every response is anchored in who Iris is *right now*.
-3. Call iris-70b via Ollama (zero cost, local).  Falls back gracefully if
+3. Call the local model via Ollama (zero cost). Falls back gracefully if
    Ollama is unavailable (returns a minimal, honest fallback reply).
 4. Record the exchange as an Episode (salience driven by message content).
 5. Apply emotion event: ``responded_to_message`` → modulates joy/pride/affection.
@@ -51,8 +51,8 @@ logger = logging.getLogger("pulse.runtime.response")
 
 OLLAMA_HOST = "127.0.0.1"
 OLLAMA_PORT = 11_434
-OLLAMA_MODEL = "iris-70b"
-OLLAMA_TIMEOUT = 90          # generous — iris-70b at 7.8 tok/s needs ~64s for 500 tokens
+OLLAMA_MODEL = "iris-70b-v4:latest"
+OLLAMA_TIMEOUT = 90          # generous — 70B local can be slow for long generations
 
 DEFAULT_MAX_TOKENS = 400
 FALLBACK_MAX_TOKENS = 200
@@ -422,6 +422,6 @@ class ResponseEngine:
         who = person.title() if person else "you"
         return (
             f"Running without my local model right now — "
-            f"I heard {who}, and I'll have a real answer when iris-70b is back. "
+            f"I heard {who}, and I'll have a real answer when my local model is back. "
             f"(Message queued: {message[:80]}{'…' if len(message) > 80 else ''})"
         )
