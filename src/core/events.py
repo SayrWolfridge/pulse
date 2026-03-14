@@ -38,6 +38,7 @@ class EventBus:
 
 
 # Event type constants
+TRIGGER_START = "trigger_start"
 TRIGGER_SUCCESS = "trigger_success"
 TRIGGER_FAILURE = "trigger_failure"
 MUTATION_APPLIED = "mutation_applied"

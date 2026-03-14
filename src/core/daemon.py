@@ -30,6 +30,7 @@ from pulse.src.core.webhook import OpenClawWebhook
 from pulse.src.core.daily_sync import DailyNoteSync
 from pulse.src.core.events import (
     EventBus,
+    TRIGGER_START,
     TRIGGER_SUCCESS,
     TRIGGER_FAILURE,
     MUTATION_APPLIED,
@@ -90,6 +91,7 @@ class PulseDaemon:
         self._turn_timestamps: list = []  # sliding window for rate limiting
         self._pid_fd = None  # file descriptor for PID lock
         self._last_generate_time: float = 0.0  # track GENERATE step timing
+        self.runtime_bridge = None  # set by HypostasRuntime.start() if Phase 1 is active
 
         # Core components
         self.state = StatePersistence(self.config)
@@ -444,8 +446,21 @@ class PulseDaemon:
         self.turn_count += 1
         self._turn_timestamps.append(self.last_trigger_time)
 
+        # RUNTIME BRIDGE — notify trigger start (ThoughtLoop gate + hot-tier log)
+        self.bus.emit(TRIGGER_START, decision=decision)
+
         # Build the message from the decision context
         message = self._build_trigger_message(decision)
+
+        # RUNTIME BRIDGE — inject cognitive context into trigger message
+        bridge = getattr(self, "runtime_bridge", None)
+        if bridge is not None:
+            try:
+                ctx_tag = bridge.format_context_for_prompt()
+                if ctx_tag:
+                    message += ctx_tag
+            except Exception as _bridge_err:
+                logger.debug(f"RuntimeBridge context injection skipped: {_bridge_err}")
 
         # PARIETAL — inject world model context
         if self.nervous_system and self.nervous_system.parietal:
