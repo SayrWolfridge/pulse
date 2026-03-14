@@ -33,10 +33,11 @@ from .relationship_graph import RelationshipGraph
 from .context_assembler import ContextAssembler
 from .response_engine import ResponseEngine
 from .proactive_engine import ProactiveEngine
+from .proactive_dispatcher import ProactiveDispatcher
 
 logger = logging.getLogger("pulse.runtime")
 
-__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine", "RelationshipGraph", "ContextAssembler", "ResponseEngine", "ProactiveEngine"]
+__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine", "RelationshipGraph", "ContextAssembler", "ResponseEngine", "ProactiveEngine", "ProactiveDispatcher"]
 
 
 class HypostasRuntime:
@@ -116,6 +117,12 @@ class HypostasRuntime:
             goal_engine=self.goal_engine,
             relationships=self.relationships,
             episodic=self.episodic,
+        )
+        self.dispatcher: ProactiveDispatcher = ProactiveDispatcher(
+            proactive=self.proactive,
+            response=self.response,
+            episodic=self.episodic,
+            state=self.state,
         )
         self.thought_loop: ThoughtLoop = ThoughtLoop(
             self.state,
@@ -280,6 +287,7 @@ class HypostasRuntime:
             "assembler": self.assembler.snapshot(),
             "response": self.response.status(),
             "proactive": self.proactive.snapshot(),
+            "dispatcher": self.dispatcher.status(),
         }
 
     # ------------------------------------------------------------------
@@ -515,6 +523,23 @@ class HypostasRuntime:
                                         existing.add(str(gid))
                                 runtime.state.set("proactive.announced_goal_ids", sorted(existing))
                         self._respond(200, json.dumps({"ok": True, "kind": kind}).encode())
+                    except Exception as exc:
+                        self._respond(500, json.dumps({"error": str(exc)}).encode())
+                elif self.path == "/runtime/proactive/deliver":
+                    try:
+                        length = int(self.headers.get("Content-Length", 0))
+                        raw = self.rfile.read(length)
+                        payload = json.loads(raw) if raw else {}
+                        mode = str(payload.get("mode", "response_only")).strip()
+                        person = str(payload.get("person", "josh")).strip()
+                        max_tokens = int(payload.get("max_tokens", 250))
+                        result = runtime.dispatcher.dispatch(
+                            mode=mode,
+                            person=person,
+                            max_tokens=max_tokens,
+                        )
+                        status_code = 200 if result.dispatched else 204
+                        self._respond(status_code, json.dumps(result.to_dict()).encode())
                     except Exception as exc:
                         self._respond(500, json.dumps({"error": str(exc)}).encode())
                 elif self.path == "/runtime/relationships/event":
