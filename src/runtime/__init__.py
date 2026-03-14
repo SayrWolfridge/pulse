@@ -24,10 +24,11 @@ from .context_engine import ContextEngine
 from .thought_loop import ThoughtLoop
 from .bridge import RuntimeBridge
 from .self_model import SelfModel
+from .goal_engine import GoalEngine
 
 logger = logging.getLogger("pulse.runtime")
 
-__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel"]
+__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine"]
 
 
 class HypostasRuntime:
@@ -68,7 +69,8 @@ class HypostasRuntime:
         self.state: StateEngine = StateEngine(self._state_dir / "hypostas-state.json")
         self.context: ContextEngine = ContextEngine(self._state_dir)
         self.self_model: SelfModel = SelfModel(self.state)
-        self.thought_loop: ThoughtLoop = ThoughtLoop(self.state, self.context, self.self_model)
+        self.goal_engine: GoalEngine = GoalEngine(self.state)
+        self.thought_loop: ThoughtLoop = ThoughtLoop(self.state, self.context, self.self_model, self.goal_engine)
         self.bridge: RuntimeBridge = RuntimeBridge(self)  # passes self so bridge can access .state/.context/.thought_loop
 
         # Optional: existing PulseDaemon (wires EventBus hooks)
@@ -102,6 +104,12 @@ class HypostasRuntime:
         # 1. Load state from disk (StateEngine loads on __init__ via _load_at_startup;
         #    calling it again here ensures any on-disk changes since init are picked up)
         self.state._load_at_startup()
+
+        # 1b. Load goals (seed or disk)
+        try:
+            self.goal_engine.load()
+        except Exception as e:
+            logger.warning("GoalEngine load failed (non-fatal): %s", e)
 
         # 2. Start StateEngine autosave thread
         self.state.start_autosave()
@@ -204,6 +212,7 @@ class HypostasRuntime:
             "thought_loop": self.thought_loop.status(),
             "bridge": self.bridge.status(),
             "self_model": self.self_model.status(),
+            "goals": self.goal_engine.status(),
         }
 
     # ------------------------------------------------------------------
@@ -228,6 +237,9 @@ class HypostasRuntime:
                 elif self.path == "/runtime/status":
                     body = json.dumps(runtime.status()).encode()
                     self._respond(200, body)
+                elif self.path == "/runtime/goals":
+                    body = json.dumps(runtime.goal_engine.snapshot()).encode()
+                    self._respond(200, body)
                 else:
                     self._respond(404, b"Not found")
 
@@ -237,6 +249,35 @@ class HypostasRuntime:
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+
+            def do_POST(self) -> None:  # noqa: N802
+                if self.path == "/runtime/goals/update":
+                    try:
+                        length = int(self.headers.get("Content-Length", 0))
+                        raw = self.rfile.read(length)
+                        payload = json.loads(raw)
+                        goal_id = payload.get("id", "")
+                        field = payload.get("field", "")
+                        value = payload.get("value")
+
+                        if field == "status" and value == "completed":
+                            ok = runtime.goal_engine.complete_goal(goal_id)
+                        elif field == "progress":
+                            ok = runtime.goal_engine.update_progress(goal_id, float(value))
+                        elif field == "add_blocker":
+                            ok = runtime.goal_engine.add_blocker(goal_id, str(value))
+                        elif field == "remove_blocker":
+                            ok = runtime.goal_engine.remove_blocker(goal_id, str(value))
+                        else:
+                            self._respond(400, json.dumps({"error": f"unknown field: {field}"}).encode())
+                            return
+
+                        result = {"ok": ok, "goals": runtime.goal_engine.status()}
+                        self._respond(200, json.dumps(result).encode())
+                    except Exception as exc:
+                        self._respond(500, json.dumps({"error": str(exc)}).encode())
+                else:
+                    self._respond(404, b"Not found")
 
             def log_message(self, fmt: str, *args) -> None:  # noqa: ANN001
                 pass  # Suppress access logs — keep logs clean

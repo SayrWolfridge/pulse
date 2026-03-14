@@ -176,8 +176,8 @@ def _build_reflect_prompt(recent_events: list[dict], drive_state: dict) -> str:
     )
 
 
-def _build_plan_prompt(open_loops: list[dict], projects: list[str]) -> str:
-    """Build a planning prompt from open loops and active projects."""
+def _build_plan_prompt(open_loops: list[dict], projects: list[str], goals_summary: str | None = None) -> str:
+    """Build a planning prompt from open loops, active projects, and (optionally) goals."""
     loops_block = ""
     if open_loops:
         items = []
@@ -189,7 +189,11 @@ def _build_plan_prompt(open_loops: list[dict], projects: list[str]) -> str:
 
     projects_block = "Active projects: " + (", ".join(projects[:5]) if projects else "none")
 
-    return f"{loops_block}\n\n{projects_block}\n\nWhat are the highest-priority next actions?"
+    goals_block = ""
+    if goals_summary:
+        goals_block = "\n\nActive goals:\n" + goals_summary
+
+    return f"{loops_block}\n\n{projects_block}{goals_block}\n\nWhat are the highest-priority next actions?"
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +219,7 @@ class ThoughtLoop:
         state: Any,         # StateEngine
         context: Any,       # ContextEngine
         self_model: Optional[Any] = None,  # SelfModel (optional — falls back gracefully)
+        goal_engine: Optional[Any] = None,  # GoalEngine (optional)
         ollama: Optional[OllamaClient] = None,
         idle_interval: int = IDLE_INTERVAL_SECONDS,
         active_interval: int = ACTIVE_INTERVAL_SECONDS,
@@ -222,6 +227,7 @@ class ThoughtLoop:
         self.state = state
         self.context = context
         self.self_model = self_model  # May be None for isolated / legacy usage
+        self.goal_engine = goal_engine  # May be None
         self.ollama = ollama or OllamaClient()
         self.idle_interval = idle_interval
         self.active_interval = active_interval
@@ -410,10 +416,19 @@ class ThoughtLoop:
             open_loops = self.state.get("working_memory.open_loops") or []
             projects = self.state.get("working_memory.current_projects") or []
 
-            if not open_loops and not projects:
+            goals_summary = None
+            if self.goal_engine is not None:
+                try:
+                    goals_summary = self.goal_engine.for_plan()
+                except Exception as _gexc:
+                    logger.debug("GoalEngine.for_plan failed: %s", _gexc)
+
+            # If there is literally nothing to plan from, bail.
+            # (But if GoalEngine exists, it counts as plan input.)
+            if not open_loops and not projects and not goals_summary:
                 return []
 
-            prompt = _build_plan_prompt(open_loops, projects)
+            prompt = _build_plan_prompt(open_loops, projects, goals_summary=goals_summary)
             response = self.ollama.generate(prompt, max_tokens=MAX_PLAN_TOKENS, system=_PLAN_SYSTEM)
 
             if not response:
