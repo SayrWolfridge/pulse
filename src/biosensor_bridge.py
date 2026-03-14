@@ -96,61 +96,82 @@ def _hrv_stress(ms: float) -> str:
         return "high"
 
 
+RUNTIME_URL = "http://127.0.0.1:9723"
+
+
+def _post_runtime(path: str, body: dict) -> bool:
+    """POST to HypostasRuntime. Returns True on success."""
+    import urllib.request
+    try:
+        data = json.dumps(body).encode()
+        req = urllib.request.Request(
+            f"{RUNTIME_URL}{path}", data=data,
+            headers={"Content-Type": "application/json"}, method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=3) as r:
+            return r.status == 200
+    except Exception as e:
+        log.warning(f"Runtime POST {path} failed: {e}")
+        return False
+
+
 def update_endocrine_from_biometrics(state: dict):
     """
-    Write ENDOCRINE event based on current biometric state.
-    This mimics what endocrine.trigger_event() would do, but file-direct.
+    Fire emotion events into HypostasRuntime EmotionEngine based on biometrics.
+    Single source of truth — no file-direct writes.
     """
-    endocrine_path = _DEFAULT_STATE_DIR / "endocrine-state.json"
-    if not endocrine_path.exists():
-        log.warning("ENDOCRINE state file not found — skipping hormonal update")
-        return
-
     try:
-        endo = json.loads(endocrine_path.read_text())
-        levels = endo.get("levels", {})
-        changed = False
-
-        # Heart rate → adrenaline + cortisol
+        # Heart rate → emotional state
         hr = state.get("heart_rate", {})
-        if hr.get("zone") == "high":
-            levels["adrenaline"] = min(1.0, levels.get("adrenaline", 0) + 0.3)
-            levels["cortisol"] = min(1.0, levels.get("cortisol", 0.2) + 0.1)
-            changed = True
-            log.info(f"HR zone=high → adrenaline +0.3, cortisol +0.1")
-        elif hr.get("zone") == "resting":
-            levels["adrenaline"] = max(0.0, levels.get("adrenaline", 0) - 0.1)
-            changed = True
+        zone = hr.get("zone")
+        if zone == "high":
+            _post_runtime("/runtime/emotion/event", {
+                "event": "HR_SPIKE",
+                "note": f"Heart rate elevated (zone={zone})"
+            })
+            log.info("HR zone=high → runtime emotion event HR_SPIKE")
+        elif zone == "resting":
+            _post_runtime("/runtime/emotion/event", {
+                "event": "HR_RESTING",
+                "note": "Heart rate resting"
+            })
 
-        # HRV → cortisol (low HRV = high stress)
+        # HRV → stress/calm
         hrv = state.get("hrv", {})
-        if hrv.get("stress_level") == "high":
-            levels["cortisol"] = min(1.0, levels.get("cortisol", 0.2) + 0.2)
-            changed = True
-            log.info(f"HRV stress=high → cortisol +0.2")
-        elif hrv.get("stress_level") == "low":
-            levels["cortisol"] = max(0.0, levels.get("cortisol", 0.2) - 0.15)
-            levels["serotonin"] = min(1.0, levels.get("serotonin", 0.5) + 0.1)
-            changed = True
-            log.info(f"HRV stress=low → cortisol -0.15, serotonin +0.1")
+        stress = hrv.get("stress_level")
+        if stress == "high":
+            _post_runtime("/runtime/emotion/event", {
+                "event": "HRV_STRESS",
+                "note": f"HRV low — stress signal"
+            })
+            log.info("HRV stress=high → runtime emotion event HRV_STRESS")
+        elif stress == "low":
+            _post_runtime("/runtime/emotion/event", {
+                "event": "HRV_CALM",
+                "note": "HRV high — calm/recovery signal"
+            })
 
-        # Activity ring completion → dopamine
+        # Activity ring → dopamine
         activity = state.get("activity", {})
         move = activity.get("move", 0)
         goal = activity.get("goal_move", 600)
         if goal > 0 and move >= goal:
-            levels["dopamine"] = min(1.0, levels.get("dopamine", 0.5) + 0.25)
-            changed = True
-            log.info(f"Move ring closed ({move}/{goal}) → dopamine +0.25")
+            _post_runtime("/runtime/emotion/event", {
+                "event": "MOVE_RING_CLOSED",
+                "note": f"Move ring closed ({move}/{goal} cal)"
+            })
+            log.info(f"Move ring closed → runtime emotion MOVE_RING_CLOSED")
 
-        if changed:
-            endo["levels"] = levels
-            endo["last_update"] = time.time()
-            endocrine_path.write_text(json.dumps(endo, indent=2))
-            log.info("ENDOCRINE state updated from biometrics")
+        # Also ingest as a message for relationship/hot-tier context
+        _post_runtime("/runtime/ingest", {
+            "message": f"[BIOSENSOR] HR zone={zone}, HRV stress={stress}, move={move}/{goal}",
+            "person": "josh",
+            "channel": "biosensor",
+            "direction": "received"
+        })
 
     except Exception as e:
-        log.error(f"ENDOCRINE update failed: {e}")
+        log.error(f"Runtime emotion update failed: {e}")
 
 
 def update_soma_from_biometrics(state: dict):
