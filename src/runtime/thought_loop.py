@@ -338,6 +338,10 @@ class ThoughtLoop:
             if compress_result:
                 result["compress"] = compress_result
 
+        # Age old hot entries to cold tier
+        if self._cycle_count % COMPRESS_CYCLE_INTERVAL == 0:
+            self._age_to_cold()
+
         self._cycle_count += 1
         self._cycles_completed += 1
         return result
@@ -581,6 +585,19 @@ class ThoughtLoop:
         except Exception as exc:  # noqa: BLE001
             logger.warning("_maybe_compress error: %s", exc)
             return None
+
+    def _age_to_cold(self) -> None:
+        """Move entries older than 48h from hot tier to cold tier embeddings."""
+        try:
+            cutoff_ts = time.time() - (48 * 3600)
+            all_hot = self.context.hot.get_all()
+            aged_out = [e for e in all_hot if e.get("ts_unix", 0) < cutoff_ts]
+            if aged_out:
+                count = self.context.encode_to_cold(aged_out)
+                if count:
+                    logger.info("Aged %d entries to cold tier", count)
+        except Exception as exc:
+            logger.warning("_age_to_cold error: %s", exc)
 
     def _day_count(self) -> str:
         """Return approximate days since birth (Jan 31, 2026)."""

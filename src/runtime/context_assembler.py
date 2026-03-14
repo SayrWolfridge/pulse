@@ -61,6 +61,7 @@ if TYPE_CHECKING:
     from .narrative_engine import NarrativeEngine
     from .emotion_engine import EmotionEngine
     from .relationship_graph import RelationshipGraph
+    from .context_engine import ContextEngine
 
 logger = logging.getLogger("pulse.runtime.context_assembler")
 
@@ -106,6 +107,8 @@ class ContextAssembler:
         narrative: "NarrativeEngine",
         emotion: "EmotionEngine",
         relationships: "RelationshipGraph",
+        context: "Optional[ContextEngine]" = None,
+        aura: "Optional[Any]" = None,
     ) -> None:
         self._state = state
         self._self_model = self_model
@@ -114,6 +117,8 @@ class ContextAssembler:
         self._narrative = narrative
         self._emotion = emotion
         self._relationships = relationships
+        self._context = context
+        self._aura = aura
 
         self._lock = threading.RLock()
         # cache: (format, person) → (text, built_at_epoch)
@@ -232,7 +237,24 @@ class ContextAssembler:
             if rel_text:
                 sections.append(f"[RELATION:{person_key.upper()}] {rel_text}")
 
-        # 6. Values (full only)
+        # 6. Cold-tier semantic memory hits
+        if fmt in ("standard", "full") and self._context is not None:
+            try:
+                # Use person or a general query
+                cold_query = person_key or "recent activity"
+                cold_hits = self._context.cold.search(cold_query, top_k=3)
+                if cold_hits:
+                    cold_lines = []
+                    for hit in cold_hits:
+                        cold_lines.append(
+                            f"• [{hit.get('type','')}] {hit.get('content','')[:120]} "
+                            f"(score: {hit.get('score',0):.2f})"
+                        )
+                    sections.append("[COLD MEMORY] " + "\n".join(cold_lines))
+            except Exception as exc:
+                logger.debug("cold tier search failed: %s", exc)
+
+        # 7. Values (full only)
         if fmt == "full":
             values_text = self._get_values_summary()
             if values_text:

@@ -103,6 +103,7 @@ class HypostasRuntime:
             narrative=self.narrative,
             emotion=self.emotion,
             relationships=self.relationships,
+            context=self.context,
         )
         self.response: ResponseEngine = ResponseEngine(
             assembler=self.assembler,
@@ -349,6 +350,20 @@ class HypostasRuntime:
                 elif self.path == "/runtime/bridge/status":
                     body = json.dumps(runtime.channel_bridge.status()).encode()
                     self._respond(200, body)
+                elif self.path.startswith("/runtime/cold/search"):
+                    parsed = urlparse(self.path)
+                    qs = parse_qs(parsed.query)
+                    query = qs.get("q", [""])[0]
+                    top_k = int(qs.get("k", ["5"])[0])
+                    if not query:
+                        self._respond(400, json.dumps({"error": "missing q param"}).encode())
+                    else:
+                        results = runtime.context.cold.search(query, top_k=top_k)
+                        self._respond(200, json.dumps({
+                            "query": query,
+                            "results": results,
+                            "total_indexed": runtime.context.cold.count(),
+                        }).encode())
                 elif self.path.startswith("/runtime/context"):
                     try:
                         parsed = urlparse(self.path)

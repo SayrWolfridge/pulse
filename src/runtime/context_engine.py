@@ -689,23 +689,151 @@ class RelationshipTier:
 
 class ColdTier:
     """
-    FAISS/pgvector semantic index for aged-out hot entries.
-    Day 4 full implementation — stub here.
+    FAISS semantic index for aged-out hot entries.
+    Uses local Ollama nomic-embed-text (768-dim) for embeddings.
+    Index + metadata sidecar persisted to disk.
     """
 
-    def __init__(self, index_path: Path):
-        self.index_path = index_path
+    def __init__(self, index_dir: Path):
+        self.index_dir = index_dir
+        self.index_dir.mkdir(parents=True, exist_ok=True)
+        self._index_path = index_dir / "cold.index"
+        self._meta_path = index_dir / "cold-meta.jsonl"
+        self._dim = 768  # nomic-embed-text dimension
+        self._lock = threading.RLock()
+        self._index: Optional[Any] = None  # faiss.IndexFlatIP
+        self._metadata: list[dict] = []
+        self._load()
 
-    def encode(self, entries: list[dict]) -> None:
-        """Encode entries into the semantic index. Day 4."""
-        pass  # Day 4
+    def _load(self) -> None:
+        """Load existing index + metadata from disk."""
+        with self._lock:
+            try:
+                import faiss
+                if self._index_path.exists():
+                    self._index = faiss.read_index(str(self._index_path))
+                else:
+                    self._index = faiss.IndexFlatIP(self._dim)
+            except ImportError:
+                # faiss not installed — degrade gracefully
+                self._index = None
+
+            self._metadata = []
+            if self._meta_path.exists():
+                for line in self._meta_path.read_text("utf-8").splitlines():
+                    line = line.strip()
+                    if line:
+                        try:
+                            self._metadata.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            pass
+
+    def _save_index(self) -> None:
+        """Persist FAISS index to disk."""
+        with self._lock:
+            if self._index is not None:
+                try:
+                    import faiss
+                    faiss.write_index(self._index, str(self._index_path))
+                except ImportError:
+                    pass
+
+    def _embed(self, texts: list[str]) -> list[list[float]]:
+        """Call Ollama /api/embeddings for a batch of texts."""
+        import http.client as _http
+        vectors = []
+        conn = _http.HTTPConnection("127.0.0.1", 11434, timeout=30)
+        try:
+            for text in texts:
+                body = json.dumps({"model": "nomic-embed-text", "prompt": text})
+                conn.request("POST", "/api/embeddings", body=body,
+                             headers={"Content-Type": "application/json"})
+                resp = conn.getresponse()
+                data = json.loads(resp.read())
+                vectors.append(data["embedding"])
+        finally:
+            conn.close()
+        return vectors
+
+    def _normalize(self, vectors: list[list[float]]) -> Any:
+        """L2-normalize for cosine similarity via inner product."""
+        import numpy as np
+        arr = np.array(vectors, dtype=np.float32)
+        norms = np.linalg.norm(arr, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        return arr / norms
+
+    def encode(self, entries: list[dict]) -> int:
+        """
+        Encode hot-tier entries into the FAISS index.
+        Returns the number of entries successfully encoded.
+        """
+        if not entries or self._index is None:
+            return 0
+        texts = []
+        metas = []
+        for e in entries:
+            content = str(e.get("content", "")).strip()
+            if not content or len(content) < 10:
+                continue
+            etype = e.get("type", "SYSTEM_EVENT")
+            embed_text = f"[{etype}] {content}"
+            texts.append(embed_text)
+            metas.append({
+                "type": etype,
+                "content": content[:500],
+                "source": e.get("source", ""),
+                "ts": e.get("ts", ""),
+                "ts_unix": e.get("ts_unix", 0.0),
+            })
+        if not texts:
+            return 0
+
+        try:
+            vectors = self._embed(texts)
+            normed = self._normalize(vectors)
+        except Exception:
+            return 0
+
+        with self._lock:
+            self._index.add(normed)
+            with open(self._meta_path, "a", encoding="utf-8") as f:
+                for m in metas:
+                    f.write(json.dumps(m) + "\n")
+            self._metadata.extend(metas)
+            self._save_index()
+        return len(texts)
 
     def search(self, query: str, top_k: int = 5) -> list[dict]:
-        """Search for semantically similar entries. Day 4."""
-        return []  # Day 4
+        """
+        Search for semantically similar entries.
+        Returns list of dicts with keys: content, type, source, ts, score.
+        """
+        with self._lock:
+            if self._index is None or self._index.ntotal == 0:
+                return []
+
+        try:
+            query_vec = self._embed([query])
+            normed_q = self._normalize(query_vec)
+        except Exception:
+            return []
+
+        with self._lock:
+            k = min(top_k, self._index.ntotal)
+            scores, indices = self._index.search(normed_q, k)
+            results = []
+            for i, idx in enumerate(indices[0]):
+                if idx < 0 or idx >= len(self._metadata):
+                    continue
+                meta = dict(self._metadata[idx])
+                meta["score"] = float(scores[0][i])
+                results.append(meta)
+        return results
 
     def count(self) -> int:
-        return 0  # Day 4
+        with self._lock:
+            return self._index.ntotal if self._index else 0
 
 
 # ---------------------------------------------------------------------------
@@ -738,7 +866,7 @@ class ContextEngine:
 
         self.hot = HotTier(self.state_dir / "context-hot.jsonl")
         self.warm = WarmTier(self.state_dir / "context-warm.json")
-        self.cold = ColdTier(self.state_dir / "context-cold.faiss")
+        self.cold = ColdTier(self.state_dir / "cold-tier")
         self.relationship = RelationshipTier(self.state_dir / "relationships")
 
     # ------------------------------------------------------------------
@@ -899,9 +1027,9 @@ class ContextEngine:
         self.warm.write_day(date, summary)
         return summary
 
-    def encode_to_cold(self, entries: list[dict]) -> None:
-        """Move aged-out hot entries into semantic embedding store. Day 4."""
-        self.cold.encode(entries)
+    def encode_to_cold(self, entries: list[dict]) -> int:
+        """Move aged-out hot entries into semantic embedding store."""
+        return self.cold.encode(entries)
 
     # ------------------------------------------------------------------
     # Status
