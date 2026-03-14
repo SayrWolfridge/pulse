@@ -68,21 +68,23 @@ EPISODE_KINDS = {
     "creative",           # Writing, journal, art
     "discovery",          # Found something new (skill, pattern, signal)
     "conversation",       # Notable exchange
+    "proactive_outreach", # Runtime initiated an outbound message
     "other",              # Catch-all
 }
 
 # Default salience by kind when not provided
 _KIND_SALIENCE: dict[str, float] = {
-    "work_complete":  6.0,
-    "insight":        7.0,
-    "emotional":      7.5,
-    "relationship":   8.5,
-    "goal_progress":  6.5,
-    "system_event":   3.0,
-    "creative":       7.0,
-    "discovery":      7.0,
-    "conversation":   6.0,
-    "other":          4.0,
+    "work_complete":      6.0,
+    "insight":            7.0,
+    "emotional":          7.5,
+    "relationship":       8.5,
+    "goal_progress":      6.5,
+    "system_event":       3.0,
+    "creative":           7.0,
+    "discovery":          7.0,
+    "conversation":       6.0,
+    "proactive_outreach": 7.0,
+    "other":              4.0,
 }
 
 # Where the buffer is persisted

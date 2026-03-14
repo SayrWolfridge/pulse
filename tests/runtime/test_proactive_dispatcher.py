@@ -77,11 +77,11 @@ class _FakeProactive:
 
 
 class _FakeResponse:
-    def __init__(self, result: Optional[_ResponseResult] = None, raise_exc=False):
+    def __init__(self, result: Optional[_ResponseResult] = None, raise_exc: bool = False):
         self._result = result or _ResponseResult()
         self._raise = raise_exc
 
-    def respond(self, message, person=None, fmt="compact", max_tokens=400):
+    def respond(self, message, person=None, fmt="compact", max_tokens=400, timeout_s=None):
         if self._raise:
             raise ConnectionRefusedError("Ollama unavailable")
         return self._result
@@ -91,10 +91,14 @@ class _FakeEpisodic:
     def __init__(self):
         self.recorded: List[dict] = []
 
-    def record(self, kind, summary, salience=5.0, tags=None):
-        ep = MagicMock()
-        ep.episode_id = f"ep-{len(self.recorded)}"
-        self.recorded.append({"kind": kind, "summary": summary, "salience": salience, "tags": tags or []})
+    def record(self, **kwargs):
+        # Mirror EpisodicBuffer.record() shape (loosely) but stay permissive.
+        # Return a dict like the real EpisodicBuffer does.
+        ep = {
+            "id": f"ep-{len(self.recorded)}",
+            **kwargs,
+        }
+        self.recorded.append(ep)
         return ep
 
 

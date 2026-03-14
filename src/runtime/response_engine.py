@@ -103,6 +103,8 @@ class _OllamaClient:
         system: str,
         user: str,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        *,
+        timeout_s: Optional[int] = None,
     ) -> tuple[str, int]:
         """
         Send a chat request to Ollama.  Returns (response_text, token_count).
@@ -118,7 +120,7 @@ class _OllamaClient:
             "options": {"num_predict": max_tokens},
         }).encode()
 
-        conn = http.client.HTTPConnection(self.host, self.port, timeout=self.timeout)
+        conn = http.client.HTTPConnection(self.host, self.port, timeout=(timeout_s if timeout_s is not None else self.timeout))
         try:
             conn.request("POST", "/api/chat", body=payload, headers={"Content-Type": "application/json"})
             resp = conn.getresponse()
@@ -207,6 +209,7 @@ class ResponseEngine:
         person: Optional[str] = None,
         fmt: str = "compact",
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        timeout_s: Optional[int] = None,
     ) -> ResponseResult:
         """
         Generate a response to *message*.
@@ -239,6 +242,7 @@ class ResponseEngine:
                 system=system_prompt,
                 user=user_prompt,
                 max_tokens=max_tokens,
+                timeout_s=timeout_s,
             )
         except Exception as exc:
             logger.warning("Ollama unavailable (%s) — using fallback response", exc)

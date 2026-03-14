@@ -349,10 +349,12 @@ class ChannelBridge:
             try:
                 if getattr(self.runtime, "episodic", None) is not None:
                     self.runtime.episodic.record(
-                        kind="outbound_message",
-                        summary=f"Sent message via {channel} to {person or 'unknown'}: {text[:80]}…",
+                        kind="conversation",
+                        title=f"Sent message via {channel} → {person or 'unknown'}",
+                        content=text,
                         salience=6.0,
                         tags=["bridge", f"channel:{channel}", f"person:{person or 'unknown'}"],
+                        source="system",
                     )
             except Exception:
                 pass

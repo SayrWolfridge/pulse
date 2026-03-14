@@ -202,11 +202,13 @@ class ProactiveDispatcher:
             try:
                 ep = self._episodic.record(
                     kind="proactive_outreach",
-                    summary=f"Dispatched {candidate.kind} to {person}: {text[:80]}…",
+                    title=f"Proactive outreach: {candidate.kind} → {person}",
+                    content=text,
                     salience=7.0,
                     tags=["proactive", candidate.kind, f"mode:{mode}"],
+                    source="system",
                 )
-                episode_id = ep.episode_id
+                episode_id = str(ep.get("id", ""))
             except Exception as exc:
                 logger.warning("EpisodicBuffer record failed: %s", exc)
 
@@ -260,10 +262,13 @@ class ProactiveDispatcher:
         """
         prompt = self._build_proactive_prompt(candidate)
         try:
+            # Proactive outreach must be fast; fall back to message_hint if the
+            # local model is slow/unavailable.
             result = self._response.respond(
                 message=prompt,
                 person=person,
-                max_tokens=max_tokens,
+                max_tokens=min(max_tokens, 120),
+                timeout_s=2,
             )
             if result.fallback:
                 # Ollama down — ResponseEngine gave minimal fallback; use hint instead
