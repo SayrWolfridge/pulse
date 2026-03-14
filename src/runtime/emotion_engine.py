@@ -215,9 +215,11 @@ class EmotionEngine:
         self,
         state: "StateEngine",
         episodic: Optional["EpisodicBuffer"] = None,
+        aura: Optional[Any] = None,
     ) -> None:
         self._state = state
         self._episodic = episodic
+        self._aura = aura
         self._lock = threading.RLock()
         self._load_or_seed()
 
@@ -375,6 +377,27 @@ class EmotionEngine:
                         salience=min(10, int(abs(delta) * 20)),
                         tags=["emotion", emotion, event_name.lower()],
                         source="emotion_engine",
+                    )
+
+            # Broadcast emotional shifts via AURA
+            if significant and self._aura is not None:
+                try:
+                    # Use the most significant shift
+                    top_emotion, before_val, after_val, _ = max(
+                        significant, key=lambda x: abs(x[3])
+                    )
+                    values = {e: round(self._raw_get(e), 4) for e in EMOTIONS}
+                    dominant = self._dominant(values)
+                    self._aura.broadcast_emotional_shift(
+                        from_state=top_emotion,
+                        to_state=self._color_label(dominant) or "steady",
+                        valence=round(values.get("joy", 0) - values.get("frustration", 0), 3),
+                        arousal=round(values.get("curiosity", 0) + values.get("longing", 0), 3) / 2,
+                    )
+                except Exception as exc:
+                    import logging as _log
+                    _log.getLogger("pulse.runtime.emotion_engine").debug(
+                        "AURA emotional shift broadcast error: %s", exc
                     )
 
             return applied

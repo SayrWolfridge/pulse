@@ -228,6 +228,7 @@ class ThoughtLoop:
         ollama: Optional[OllamaClient] = None,
         idle_interval: int = IDLE_INTERVAL_SECONDS,
         active_interval: int = ACTIVE_INTERVAL_SECONDS,
+        runtime: Optional[Any] = None,  # HypostasRuntime back-reference (for AURA)
     ):
         self.state = state
         self.context = context
@@ -236,6 +237,7 @@ class ThoughtLoop:
         self.episodic = episodic  # May be None
         self.narrative = narrative  # May be None — NarrativeEngine (Day 10)
         self.ollama = ollama or OllamaClient()
+        self._runtime = runtime
         self.idle_interval = idle_interval
         self.active_interval = active_interval
 
@@ -341,6 +343,38 @@ class ThoughtLoop:
         # Age old hot entries to cold tier
         if self._cycle_count % COMPRESS_CYCLE_INTERVAL == 0:
             self._age_to_cold()
+
+        # AURA: poll constellation updates
+        if self._runtime is not None and hasattr(self._runtime, 'aura'):
+            try:
+                new_events = self._runtime.aura.poll()
+                for event in new_events:
+                    self.context.log_event({
+                        "type": "SYSTEM_EVENT",
+                        "content": f"[AURA:{event.get('agent','')}] {event.get('kind','')}: {json.dumps(event.get('payload',{}))[:200]}",
+                        "source": f"aura:{event.get('agent','')}",
+                    })
+            except Exception as exc:
+                logger.debug("AURA poll error: %s", exc)
+
+        # AURA: broadcast state summary every 5 cycles
+        if self._cycle_count % 5 == 0 and self._runtime is not None and hasattr(self._runtime, 'aura'):
+            try:
+                summary = {
+                    "emotion": self._runtime.emotion.snapshot() if self._runtime.emotion else {},
+                    "goals_active": len(getattr(self._runtime.goal_engine, 'active_goals', []) or []),
+                    "hot_entries": self._runtime.context.hot.count(),
+                }
+                self._runtime.aura.broadcast_state_summary(summary)
+            except Exception as exc:
+                logger.debug("AURA state summary broadcast error: %s", exc)
+
+        # AURA: broadcast insights
+        if insight and self._runtime is not None and hasattr(self._runtime, 'aura'):
+            try:
+                self._runtime.aura.broadcast_insight(insight)
+            except Exception as exc:
+                logger.debug("AURA insight broadcast error: %s", exc)
 
         self._cycle_count += 1
         self._cycles_completed += 1

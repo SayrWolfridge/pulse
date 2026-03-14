@@ -254,7 +254,26 @@ class ContextAssembler:
             except Exception as exc:
                 logger.debug("cold tier search failed: %s", exc)
 
-        # 7. Values (full only)
+        # 7. Constellation awareness (AURA)
+        if fmt in ("standard", "full") and self._aura is not None:
+            try:
+                agents = self._aura.list_agents()
+                if agents:
+                    agent_lines = []
+                    for agent in agents[:5]:
+                        state = self._aura.get_agent_state(agent)
+                        if state:
+                            emotion = state.get("emotion", {}).get("color", "unknown")
+                            goals = state.get("goals_active", 0)
+                            agent_lines.append(f"• {agent}: emotion={emotion}, active_goals={goals}")
+                        else:
+                            agent_lines.append(f"• {agent}: (no recent state)")
+                    if agent_lines:
+                        sections.append("[CONSTELLATION] " + "\n".join(agent_lines))
+            except Exception as exc:
+                logger.debug("AURA constellation context failed: %s", exc)
+
+        # 8. Values (full only)
         if fmt == "full":
             values_text = self._get_values_summary()
             if values_text:

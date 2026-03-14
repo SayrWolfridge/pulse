@@ -35,10 +35,11 @@ from .response_engine import ResponseEngine
 from .proactive_engine import ProactiveEngine
 from .proactive_dispatcher import ProactiveDispatcher
 from .channel_bridge import ChannelBridge
+from .aura import AuraEngine
 
 logger = logging.getLogger("pulse.runtime")
 
-__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine", "RelationshipGraph", "ContextAssembler", "ResponseEngine", "ProactiveEngine", "ProactiveDispatcher", "ChannelBridge"]
+__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine", "RelationshipGraph", "ContextAssembler", "ResponseEngine", "ProactiveEngine", "ProactiveDispatcher", "ChannelBridge", "AuraEngine"]
 
 
 class HypostasRuntime:
@@ -82,6 +83,11 @@ class HypostasRuntime:
         self.goal_engine: GoalEngine = GoalEngine(self.state)
         self.episodic: EpisodicBuffer = EpisodicBuffer(self.state, path=self._state_dir / "episodes.jsonl")
         self.emotion: EmotionEngine = EmotionEngine(self.state, episodic=self.episodic)
+        self.aura: AuraEngine = AuraEngine(
+            agent_name=str(self.state.get("meta.agent_name") or "iris")
+        )
+        # Wire AURA into EmotionEngine for emotional shift broadcasts
+        self.emotion._aura = self.aura
         self.relationships: RelationshipGraph = RelationshipGraph(
             context=self.context,
             state=self.state,
@@ -104,6 +110,7 @@ class HypostasRuntime:
             emotion=self.emotion,
             relationships=self.relationships,
             context=self.context,
+            aura=self.aura,
         )
         self.response: ResponseEngine = ResponseEngine(
             assembler=self.assembler,
@@ -134,6 +141,7 @@ class HypostasRuntime:
             goal_engine=self.goal_engine,
             episodic=self.episodic,
             narrative=self.narrative,
+            runtime=self,
         )
         self.bridge: RuntimeBridge = RuntimeBridge(self)  # passes self so bridge can access .state/.context/.thought_loop
 
@@ -292,6 +300,7 @@ class HypostasRuntime:
             "proactive": self.proactive.snapshot(),
             "dispatcher": self.dispatcher.status(),
             "channel_bridge": self.channel_bridge.status(),
+            "aura": self.aura.snapshot(),
         }
 
     # ------------------------------------------------------------------
@@ -422,6 +431,18 @@ class HypostasRuntime:
                     self._respond(200, body)
                 elif self.path == "/runtime/bridge/status":
                     body = json.dumps(runtime.channel_bridge.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/aura":
+                    body = json.dumps(runtime.aura.snapshot()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/aura/poll":
+                    events = runtime.aura.poll()
+                    body = json.dumps({"events": events, "count": len(events)}).encode()
+                    self._respond(200, body)
+                elif self.path.startswith("/runtime/aura/agent/"):
+                    agent_name = self.path.split("/")[-1]
+                    state = runtime.aura.get_agent_state(agent_name)
+                    body = json.dumps({"agent": agent_name, "state": state}).encode()
                     self._respond(200, body)
                 elif self.path.startswith("/runtime/cold/search"):
                     parsed = urlparse(self.path)
@@ -705,6 +726,18 @@ class HypostasRuntime:
                         )
                         status_code = 200 if result.dispatched else 204
                         self._respond(status_code, json.dumps(result.to_dict()).encode())
+                    except Exception as exc:
+                        self._respond(500, json.dumps({"error": str(exc)}).encode())
+                elif self.path == "/runtime/aura/broadcast":
+                    try:
+                        length = int(self.headers.get("Content-Length", 0))
+                        raw = self.rfile.read(length)
+                        payload = json.loads(raw) if raw else {}
+                        kind = str(payload.get("kind", "insight"))
+                        data = payload.get("payload", {})
+                        ttl = float(payload.get("ttl_hours", 24.0))
+                        event = runtime.aura.broadcast(kind, data, ttl)
+                        self._respond(200, json.dumps(event).encode())
                     except Exception as exc:
                         self._respond(500, json.dumps({"error": str(exc)}).encode())
                 elif self.path == "/runtime/ingest":
