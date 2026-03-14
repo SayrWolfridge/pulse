@@ -295,6 +295,79 @@ class HypostasRuntime:
         }
 
     # ------------------------------------------------------------------
+    # Ingest (observe-only message processing)
+    # ------------------------------------------------------------------
+
+    def ingest_message(
+        self,
+        message: str,
+        person: str = "josh",
+        channel: str = "signal",
+        direction: str = "received",
+    ) -> dict:
+        """
+        Observe-only message processing. No response generated.
+
+        Pipeline:
+          1. Log to hot tier (MESSAGE_RECEIVED or MESSAGE_SENT)
+          2. Update relationship graph
+          3. Trigger emotional processing
+          4. Record episodic trace
+          5. Return acknowledgment
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # 1. Log to hot tier
+        event_type = "MESSAGE_RECEIVED" if direction == "received" else "MESSAGE_SENT"
+        self.context.log_event({
+            "type": event_type,
+            "content": message,
+            "source": person,
+            "channel": channel,
+        })
+
+        # 2. Update relationship graph
+        try:
+            self.relationships.record_event(
+                person=person,
+                kind="message",
+                note=f"[{channel}] {message[:200]}",
+            )
+        except Exception as e:
+            logger.warning("Ingest: relationship update failed: %s", e)
+
+        # 3. Emotional processing
+        try:
+            if direction == "received" and person.lower() in ("josh",):
+                self.emotion.apply_event("JOSH_MESSAGE", note=message[:200])
+            elif direction == "received":
+                # Generic message event — just light joy + affection
+                self.emotion.update("joy", 0.05, reason=f"message from {person}")
+        except Exception as e:
+            logger.warning("Ingest: emotion update failed: %s", e)
+
+        # 4. Episodic trace
+        try:
+            self.episodic.record(
+                kind="conversation",
+                title=f"{'Received' if direction == 'received' else 'Sent'} via {channel} — {person}",
+                content=message[:500],
+                salience=7.0 if person.lower() == "josh" else 5.0,
+                tags=["ingest", f"channel:{channel}", f"person:{person}"],
+                source="system",
+            )
+        except Exception as e:
+            logger.warning("Ingest: episodic record failed: %s", e)
+
+        return {
+            "ok": True,
+            "event_type": event_type,
+            "person": person,
+            "channel": channel,
+            "ts": now_iso,
+        }
+
+    # ------------------------------------------------------------------
     # Health server (port 9723)
     # ------------------------------------------------------------------
 
@@ -632,6 +705,27 @@ class HypostasRuntime:
                         )
                         status_code = 200 if result.dispatched else 204
                         self._respond(status_code, json.dumps(result.to_dict()).encode())
+                    except Exception as exc:
+                        self._respond(500, json.dumps({"error": str(exc)}).encode())
+                elif self.path == "/runtime/ingest":
+                    try:
+                        length = int(self.headers.get("Content-Length", 0))
+                        raw = self.rfile.read(length)
+                        payload = json.loads(raw) if raw else {}
+                        message = str(payload.get("message", "")).strip()
+                        if not message:
+                            self._respond(400, json.dumps({"error": "missing message"}).encode())
+                            return
+                        person = str(payload.get("person", payload.get("sender", "josh")))
+                        channel = str(payload.get("channel", "signal"))
+                        direction = str(payload.get("direction", "received"))
+                        result = runtime.ingest_message(
+                            message=message,
+                            person=person,
+                            channel=channel,
+                            direction=direction,
+                        )
+                        self._respond(200, json.dumps(result).encode())
                     except Exception as exc:
                         self._respond(500, json.dumps({"error": str(exc)}).encode())
                 elif self.path == "/runtime/relationships/event":
