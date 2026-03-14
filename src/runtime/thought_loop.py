@@ -220,6 +220,7 @@ class ThoughtLoop:
         context: Any,       # ContextEngine
         self_model: Optional[Any] = None,  # SelfModel (optional — falls back gracefully)
         goal_engine: Optional[Any] = None,  # GoalEngine (optional)
+        episodic: Optional[Any] = None,  # EpisodicBuffer (optional)
         ollama: Optional[OllamaClient] = None,
         idle_interval: int = IDLE_INTERVAL_SECONDS,
         active_interval: int = ACTIVE_INTERVAL_SECONDS,
@@ -228,6 +229,7 @@ class ThoughtLoop:
         self.context = context
         self.self_model = self_model  # May be None for isolated / legacy usage
         self.goal_engine = goal_engine  # May be None
+        self.episodic = episodic  # May be None
         self.ollama = ollama or OllamaClient()
         self.idle_interval = idle_interval
         self.active_interval = active_interval
@@ -394,6 +396,14 @@ class ThoughtLoop:
             drives = self.state.get("drives") or {}
             prompt = _build_reflect_prompt(recent, drives)
 
+            # Append episodic memory context (if available)
+            if self.episodic is not None:
+                try:
+                    if getattr(self.episodic, "count", None) and self.episodic.count() > 0:
+                        prompt = prompt + "\n\n" + self.episodic.context_narrative()
+                except Exception as _eexc:
+                    logger.debug("EpisodicBuffer context_narrative failed: %s", _eexc)
+
             if dream_mode:
                 prompt = (
                     "It's the quiet hours. Day " + self._day_count() + ".\n\n"
@@ -429,6 +439,15 @@ class ThoughtLoop:
                 return []
 
             prompt = _build_plan_prompt(open_loops, projects, goals_summary=goals_summary)
+
+            # Episodic memory can change what "most important next action" means.
+            if self.episodic is not None:
+                try:
+                    if getattr(self.episodic, "count", None) and self.episodic.count() > 0:
+                        prompt = prompt + "\n\n" + self.episodic.context_narrative()
+                except Exception as _eexc:
+                    logger.debug("EpisodicBuffer context_narrative failed: %s", _eexc)
+
             response = self.ollama.generate(prompt, max_tokens=MAX_PLAN_TOKENS, system=_PLAN_SYSTEM)
 
             if not response:

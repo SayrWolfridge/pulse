@@ -25,10 +25,11 @@ from .thought_loop import ThoughtLoop
 from .bridge import RuntimeBridge
 from .self_model import SelfModel
 from .goal_engine import GoalEngine
+from .episodic_buffer import EpisodicBuffer
 
 logger = logging.getLogger("pulse.runtime")
 
-__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine"]
+__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer"]
 
 
 class HypostasRuntime:
@@ -70,7 +71,14 @@ class HypostasRuntime:
         self.context: ContextEngine = ContextEngine(self._state_dir)
         self.self_model: SelfModel = SelfModel(self.state)
         self.goal_engine: GoalEngine = GoalEngine(self.state)
-        self.thought_loop: ThoughtLoop = ThoughtLoop(self.state, self.context, self.self_model, self.goal_engine)
+        self.episodic: EpisodicBuffer = EpisodicBuffer(self.state, path=self._state_dir / "episodes.jsonl")
+        self.thought_loop: ThoughtLoop = ThoughtLoop(
+            self.state,
+            self.context,
+            self_model=self.self_model,
+            goal_engine=self.goal_engine,
+            episodic=self.episodic,
+        )
         self.bridge: RuntimeBridge = RuntimeBridge(self)  # passes self so bridge can access .state/.context/.thought_loop
 
         # Optional: existing PulseDaemon (wires EventBus hooks)
@@ -110,6 +118,12 @@ class HypostasRuntime:
             self.goal_engine.load()
         except Exception as e:
             logger.warning("GoalEngine load failed (non-fatal): %s", e)
+
+        # 1c. Load episodic buffer
+        try:
+            self.episodic.load()
+        except Exception as e:
+            logger.warning("EpisodicBuffer load failed (non-fatal): %s", e)
 
         # 2. Start StateEngine autosave thread
         self.state.start_autosave()
@@ -213,6 +227,7 @@ class HypostasRuntime:
             "bridge": self.bridge.status(),
             "self_model": self.self_model.status(),
             "goals": self.goal_engine.status(),
+            "episodic": self.episodic.status(),
         }
 
     # ------------------------------------------------------------------
@@ -240,6 +255,12 @@ class HypostasRuntime:
                 elif self.path == "/runtime/goals":
                     body = json.dumps(runtime.goal_engine.snapshot()).encode()
                     self._respond(200, body)
+                elif self.path == "/runtime/episodes":
+                    body = json.dumps(runtime.episodic.snapshot(top=20)).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/episodes/context":
+                    body = json.dumps({"narrative": runtime.episodic.context_narrative()}).encode()
+                    self._respond(200, body)
                 else:
                     self._respond(404, b"Not found")
 
@@ -251,7 +272,26 @@ class HypostasRuntime:
                 self.wfile.write(body)
 
             def do_POST(self) -> None:  # noqa: N802
-                if self.path == "/runtime/goals/update":
+                if self.path == "/runtime/episodes":
+                    try:
+                        length = int(self.headers.get("Content-Length", 0))
+                        raw = self.rfile.read(length)
+                        payload = json.loads(raw)
+                        ep = runtime.episodic.record(
+                            kind=payload.get("kind", "other"),
+                            title=payload.get("title", ""),
+                            content=payload.get("content", ""),
+                            salience=payload.get("salience"),
+                            tags=payload.get("tags"),
+                            source=payload.get("source", "manual"),
+                            linked_goal=payload.get("linked_goal"),
+                        )
+                        self._respond(201, json.dumps(ep).encode())
+                    except (ValueError, KeyError) as exc:
+                        self._respond(400, json.dumps({"error": str(exc)}).encode())
+                    except Exception as exc:
+                        self._respond(500, json.dumps({"error": str(exc)}).encode())
+                elif self.path == "/runtime/goals/update":
                     try:
                         length = int(self.headers.get("Content-Length", 0))
                         raw = self.rfile.read(length)
