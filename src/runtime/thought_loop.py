@@ -221,6 +221,7 @@ class ThoughtLoop:
         self_model: Optional[Any] = None,  # SelfModel (optional — falls back gracefully)
         goal_engine: Optional[Any] = None,  # GoalEngine (optional)
         episodic: Optional[Any] = None,  # EpisodicBuffer (optional)
+        narrative: Optional[Any] = None,  # NarrativeEngine (optional — Day 10)
         ollama: Optional[OllamaClient] = None,
         idle_interval: int = IDLE_INTERVAL_SECONDS,
         active_interval: int = ACTIVE_INTERVAL_SECONDS,
@@ -230,6 +231,7 @@ class ThoughtLoop:
         self.self_model = self_model  # May be None for isolated / legacy usage
         self.goal_engine = goal_engine  # May be None
         self.episodic = episodic  # May be None
+        self.narrative = narrative  # May be None — NarrativeEngine (Day 10)
         self.ollama = ollama or OllamaClient()
         self.idle_interval = idle_interval
         self.active_interval = active_interval
@@ -396,6 +398,15 @@ class ThoughtLoop:
             drives = self.state.get("drives") or {}
             prompt = _build_reflect_prompt(recent, drives)
 
+            # Prepend narrative context (Day 10 — NarrativeEngine)
+            if self.narrative is not None:
+                try:
+                    narrative_text = self.narrative.get()
+                    if narrative_text:
+                        prompt = f"[NARRATIVE: {narrative_text}]\n\n" + prompt
+                except Exception as _nexc:
+                    logger.debug("NarrativeEngine.get() failed in reflect: %s", _nexc)
+
             # Append episodic memory context (if available)
             if self.episodic is not None:
                 try:
@@ -439,6 +450,15 @@ class ThoughtLoop:
                 return []
 
             prompt = _build_plan_prompt(open_loops, projects, goals_summary=goals_summary)
+
+            # Prepend narrative preamble so planning is grounded in current identity (Day 10)
+            if self.narrative is not None:
+                try:
+                    narrative_text = self.narrative.get()
+                    if narrative_text:
+                        prompt = f"[NARRATIVE: {narrative_text}]\n\n" + prompt
+                except Exception as _nexc:
+                    logger.debug("NarrativeEngine.get() failed in plan: %s", _nexc)
 
             # Episodic memory can change what "most important next action" means.
             if self.episodic is not None:

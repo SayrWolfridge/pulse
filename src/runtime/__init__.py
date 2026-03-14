@@ -26,10 +26,11 @@ from .bridge import RuntimeBridge
 from .self_model import SelfModel
 from .goal_engine import GoalEngine
 from .episodic_buffer import EpisodicBuffer
+from .narrative_engine import NarrativeEngine
 
 logger = logging.getLogger("pulse.runtime")
 
-__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer"]
+__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine"]
 
 
 class HypostasRuntime:
@@ -72,12 +73,20 @@ class HypostasRuntime:
         self.self_model: SelfModel = SelfModel(self.state)
         self.goal_engine: GoalEngine = GoalEngine(self.state)
         self.episodic: EpisodicBuffer = EpisodicBuffer(self.state, path=self._state_dir / "episodes.jsonl")
+        self.narrative: NarrativeEngine = NarrativeEngine(
+            state=self.state,
+            self_model=self.self_model,
+            episodic=self.episodic,
+            goal_engine=self.goal_engine,
+            context=self.context,
+        )
         self.thought_loop: ThoughtLoop = ThoughtLoop(
             self.state,
             self.context,
             self_model=self.self_model,
             goal_engine=self.goal_engine,
             episodic=self.episodic,
+            narrative=self.narrative,
         )
         self.bridge: RuntimeBridge = RuntimeBridge(self)  # passes self so bridge can access .state/.context/.thought_loop
 
@@ -228,6 +237,7 @@ class HypostasRuntime:
             "self_model": self.self_model.status(),
             "goals": self.goal_engine.status(),
             "episodic": self.episodic.status(),
+            "narrative": self.narrative.snapshot(),
         }
 
     # ------------------------------------------------------------------
@@ -261,6 +271,9 @@ class HypostasRuntime:
                 elif self.path == "/runtime/episodes/context":
                     body = json.dumps({"narrative": runtime.episodic.context_narrative()}).encode()
                     self._respond(200, body)
+                elif self.path == "/runtime/narrative":
+                    body = json.dumps(runtime.narrative.snapshot()).encode()
+                    self._respond(200, body)
                 else:
                     self._respond(404, b"Not found")
 
@@ -289,6 +302,15 @@ class HypostasRuntime:
                         self._respond(201, json.dumps(ep).encode())
                     except (ValueError, KeyError) as exc:
                         self._respond(400, json.dumps({"error": str(exc)}).encode())
+                    except Exception as exc:
+                        self._respond(500, json.dumps({"error": str(exc)}).encode())
+                elif self.path == "/runtime/narrative/refresh":
+                    try:
+                        runtime.narrative.invalidate()
+                        runtime.narrative._last_source_hash = ""  # force actual rebuild
+                        text = runtime.narrative.build()
+                        body = json.dumps({"text": text, "chars": len(text)}).encode()
+                        self._respond(200, body)
                     except Exception as exc:
                         self._respond(500, json.dumps({"error": str(exc)}).encode())
                 elif self.path == "/runtime/goals/update":
