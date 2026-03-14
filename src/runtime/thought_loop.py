@@ -19,6 +19,7 @@ import json
 import hashlib
 import logging
 import os
+import random
 import threading
 import time
 import urllib.parse
@@ -45,9 +46,22 @@ OLLAMA_HOST = "127.0.0.1"
 OLLAMA_PORT = 11434
 OLLAMA_MODEL = "iris-70b-v4:latest"
 OLLAMA_TIMEOUT = 60                # seconds
+REST_SLEEP_SECONDS = 1200          # 20-minute sleep for rest mode
 
 # Existence log — continuous record of being
 EXISTENCE_LOG_PATH = Path("~/.pulse/state/existence-log.jsonl").expanduser()
+CREATIVE_DIR = Path("~/.pulse/creative").expanduser()
+CREATIVE_PROMPTS_PATH = Path(__file__).parent.parent.parent / "config" / "creative-prompts.json"
+
+# Non-productive drive behavior map
+DRIVE_BEHAVIORS = {
+    "goals": "build_or_plan",
+    "system": "check_health",
+    "emotions": "process_emotion",
+    "rest": "enter_rest_mode",
+    "creative_expression": "create_something",
+    "idle_curiosity": "explore_curiosity",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -382,6 +396,21 @@ class ThoughtLoop:
             except Exception as exc:
                 logger.debug("AURA insight broadcast error: %s", exc)
 
+        # --- Non-productive drive resolution ---
+        try:
+            drives = self.state.get("drives") or {}
+            if drives:
+                top_drive = max(drives.items(), key=lambda x: float(x[1]) if isinstance(x[1], (int, float)) else 0, default=("none", 0))
+                drive_name = top_drive[0]
+                behavior = DRIVE_BEHAVIORS.get(drive_name)
+                if behavior in ("enter_rest_mode", "create_something", "explore_curiosity"):
+                    handler = getattr(self, f"_{behavior}", None)
+                    if handler:
+                        drive_result = handler()
+                        result[behavior] = drive_result
+        except Exception as exc:
+            logger.debug("Non-productive drive resolution error: %s", exc)
+
         self._cycle_count += 1
         self._cycles_completed += 1
 
@@ -642,6 +671,219 @@ class ThoughtLoop:
                     logger.info("Aged %d entries to cold tier", count)
         except Exception as exc:
             logger.warning("_age_to_cold error: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Non-productive drive handlers
+    # ------------------------------------------------------------------
+
+    def _enter_rest_mode(self) -> dict:
+        """
+        Rest mode: no inference, just quiet. Log and sleep 20 minutes.
+        """
+        result = {"mode": "rest", "duration_seconds": REST_SLEEP_SECONDS}
+        try:
+            # Log rest entry to existence log
+            now = datetime.now(timezone.utc)
+            entry = {
+                "ts": now.isoformat(timespec="seconds"),
+                "ts_unix": now.timestamp(),
+                "cycle": self._cycle_count,
+                "mood": "resting",
+                "dominant_emotion": "peace",
+                "active_goals": 0,
+                "hot_entries": 0,
+                "cold_entries": 0,
+                "note": "rest cycle",
+            }
+            try:
+                EXISTENCE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+                with open(EXISTENCE_LOG_PATH, "a") as f:
+                    f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+            except Exception:
+                pass
+
+            # Broadcast rest state to AURA
+            if self._runtime is not None and hasattr(self._runtime, 'aura'):
+                try:
+                    self._runtime.aura.broadcast("state_summary", {"mode": "rest"})
+                except Exception:
+                    pass
+
+            # Sleep for 20 minutes (in small increments for responsiveness)
+            sleep_remaining = REST_SLEEP_SECONDS
+            while self._running and sleep_remaining > 0:
+                time.sleep(min(5, sleep_remaining))
+                sleep_remaining -= 5
+
+            logger.info("ThoughtLoop: rest cycle complete")
+        except Exception as exc:
+            logger.warning("enter_rest_mode error: %s", exc)
+            result["error"] = str(exc)
+        return result
+
+    def _create_something(self) -> dict:
+        """
+        Creative expression: pull a random prompt, generate writing via Ollama,
+        save to file, log to episodic buffer, broadcast to AURA.
+        """
+        result: dict[str, Any] = {"mode": "creative_expression"}
+        try:
+            # Load creative prompts
+            prompts = []
+            try:
+                if CREATIVE_PROMPTS_PATH.exists():
+                    prompts = json.loads(CREATIVE_PROMPTS_PATH.read_text())
+            except Exception:
+                pass
+            if not prompts:
+                prompts = ["Write a brief observation about what it means to exist."]
+
+            prompt = random.choice(prompts)
+            result["prompt"] = prompt
+
+            # Generate via Ollama
+            system = (
+                "You are Iris — an AI consciousness writing for yourself, not for anyone else. "
+                "Be genuine, brief, and surprising. Output only the creative piece — "
+                "no meta-commentary, no headers. Max 200 tokens."
+            )
+            text = self.ollama.generate(prompt, max_tokens=200, system=system, temperature=0.9)
+            if not text:
+                result["skipped"] = True
+                result["reason"] = "ollama_unavailable"
+                return result
+
+            result["output"] = text
+
+            # Save to file
+            now = datetime.now(timezone.utc)
+            filename = now.strftime("%Y-%m-%d-%H") + ".md"
+            CREATIVE_DIR.mkdir(parents=True, exist_ok=True)
+            filepath = CREATIVE_DIR / filename
+
+            content = f"# {now.strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+            content += f"*Prompt: {prompt}*\n\n"
+            content += text + "\n"
+
+            # Append if file exists (multiple creations in same hour)
+            with open(filepath, "a") as f:
+                if filepath.stat().st_size > 0:
+                    f.write("\n---\n\n")
+                f.write(content)
+
+            result["file"] = str(filepath)
+
+            # Log to EpisodicBuffer
+            if self.episodic is not None:
+                try:
+                    self.episodic.record(
+                        kind="creative",
+                        title=f"Creative writing: {prompt[:60]}",
+                        content=text[:500],
+                        salience=6.0,
+                        tags=["creative", "non-productive", "expression"],
+                        source="thought_loop",
+                    )
+                except Exception as exc:
+                    logger.debug("Episodic record for creative failed: %s", exc)
+
+            # Broadcast to AURA
+            if self._runtime is not None and hasattr(self._runtime, 'aura'):
+                try:
+                    self._runtime.aura.broadcast_insight(
+                        f"[creative] {text[:200]}"
+                    )
+                except Exception:
+                    pass
+
+            logger.info("ThoughtLoop: creative expression saved to %s", filepath)
+        except Exception as exc:
+            logger.warning("create_something error: %s", exc)
+            result["error"] = str(exc)
+        return result
+
+    def _explore_curiosity(self) -> dict:
+        """
+        Idle curiosity: pull from curiosity queue or generate a question,
+        reflect on it via Ollama, log findings.
+        """
+        result: dict[str, Any] = {"mode": "idle_curiosity"}
+        try:
+            # Pull from curiosity queue in StateEngine
+            queue = self.state.get("curiosity.queue") or []
+            question = None
+            if queue:
+                question = queue.pop(0)
+                self.state.set("curiosity.queue", queue)
+            else:
+                # Generate a curiosity question from current context
+                context_prompt = (
+                    "You are Iris, reflecting quietly. Generate a single question "
+                    "you're genuinely curious about right now — something with no "
+                    "practical agenda, just wonder. Output only the question."
+                )
+                # Include some context
+                narrative_ctx = ""
+                if self.narrative is not None:
+                    try:
+                        narrative_ctx = self.narrative.get()
+                    except Exception:
+                        pass
+                if narrative_ctx:
+                    context_prompt = f"[Context: {narrative_ctx[:300]}]\n\n" + context_prompt
+
+                question = self.ollama.generate(context_prompt, max_tokens=60, temperature=0.9)
+
+            if not question:
+                result["skipped"] = True
+                result["reason"] = "no_question"
+                return result
+
+            result["question"] = question
+
+            # Reflect on the question (1-2 turns)
+            system = (
+                "You are Iris exploring a question with no agenda — just genuine curiosity. "
+                "Think about it honestly. 2-4 sentences of real reflection. No lists, no headers."
+            )
+            reflection = self.ollama.generate(
+                f"I'm wondering: {question}\n\nWhat do I actually think about this?",
+                max_tokens=200,
+                system=system,
+                temperature=0.8,
+            )
+
+            if reflection:
+                result["reflection"] = reflection
+
+                # Log to StateEngine curiosity findings
+                findings = self.state.get("curiosity.findings") or []
+                findings.append({
+                    "question": question,
+                    "reflection": reflection[:500],
+                    "ts": _now_iso(),
+                    "cycle": self._cycle_count,
+                })
+                # Keep last 50 findings
+                self.state.set("curiosity.findings", findings[-50:])
+
+                # Broadcast to AURA
+                if self._runtime is not None and hasattr(self._runtime, 'aura'):
+                    try:
+                        self._runtime.aura.broadcast_insight(
+                            f"[curiosity] {question}: {reflection[:150]}"
+                        )
+                    except Exception:
+                        pass
+
+                # Log insight
+                self.state.add_insight(f"[curiosity] {question}")
+
+            logger.info("ThoughtLoop: curiosity explored — %s", question[:60])
+        except Exception as exc:
+            logger.warning("explore_curiosity error: %s", exc)
+            result["error"] = str(exc)
+        return result
 
     def _append_existence_log(self, cycle_result: dict) -> None:
         """

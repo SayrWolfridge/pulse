@@ -448,6 +448,30 @@ class HypostasRuntime:
                     data = runtime.narrative.get_continuity_data()
                     body = json.dumps(data).encode()
                     self._respond(200, body)
+                elif self.path == "/runtime/creative":
+                    creative_dir = Path("~/.pulse/creative").expanduser()
+                    files = []
+                    if creative_dir.exists():
+                        all_files = sorted(creative_dir.glob("*.md"), reverse=True)
+                        for f in all_files[:10]:
+                            try:
+                                content = f.read_text()[:2000]
+                                files.append({
+                                    "filename": f.name,
+                                    "path": str(f),
+                                    "size": f.stat().st_size,
+                                    "modified": datetime.fromtimestamp(
+                                        f.stat().st_mtime, tz=timezone.utc
+                                    ).isoformat(),
+                                    "content": content,
+                                })
+                            except Exception:
+                                files.append({"filename": f.name, "error": "read failed"})
+                    body = json.dumps({
+                        "count": len(files),
+                        "files": files,
+                    }).encode()
+                    self._respond(200, body)
                 elif self.path.startswith("/runtime/cold/search"):
                     parsed = urlparse(self.path)
                     qs = parse_qs(parsed.query)
