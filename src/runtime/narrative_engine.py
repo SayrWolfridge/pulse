@@ -31,7 +31,7 @@ HTTP endpoints (registered by HypostasRuntime):
 
 ThoughtLoop integration:
   narrative_engine.get() is prepended to every reflect + plan prompt
-  as a ``[NARRATIVE: ...]`` block so iris-70b has full identity context.
+  as a ``[NARRATIVE: ...]`` block so the local model has full identity context.
 """
 
 from __future__ import annotations
@@ -287,7 +287,7 @@ class NarrativeEngine:
         Weave source data into a coherent first-person narrative.
 
         Uses template synthesis (no LLM dependency — must work offline,
-        zero latency, zero token cost). The ThoughtLoop's iris-70b already
+        zero latency, zero token cost). The ThoughtLoop's local model already
         has the full narrative injected; NarrativeEngine itself stays fast.
 
         Output structure:
