@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 from .state_engine import StateEngine
 from .context_engine import ContextEngine
@@ -29,10 +30,11 @@ from .episodic_buffer import EpisodicBuffer
 from .narrative_engine import NarrativeEngine
 from .emotion_engine import EmotionEngine
 from .relationship_graph import RelationshipGraph
+from .context_assembler import ContextAssembler
 
 logger = logging.getLogger("pulse.runtime")
 
-__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine", "RelationshipGraph"]
+__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine", "RelationshipGraph", "ContextAssembler"]
 
 
 class HypostasRuntime:
@@ -88,6 +90,15 @@ class HypostasRuntime:
             goal_engine=self.goal_engine,
             context=self.context,
             emotion=self.emotion,
+        )
+        self.assembler: ContextAssembler = ContextAssembler(
+            state=self.state,
+            self_model=self.self_model,
+            goal_engine=self.goal_engine,
+            episodic=self.episodic,
+            narrative=self.narrative,
+            emotion=self.emotion,
+            relationships=self.relationships,
         )
         self.thought_loop: ThoughtLoop = ThoughtLoop(
             self.state,
@@ -249,6 +260,7 @@ class HypostasRuntime:
             "narrative": self.narrative.snapshot(),
             "emotion": self.emotion.status(),
             "relationships": self.relationships.status() if hasattr(self.relationships, "status") else {"count": len(self.context.get_all_relationships() or {})},
+            "assembler": self.assembler.snapshot(),
         }
 
     # ------------------------------------------------------------------
@@ -297,6 +309,23 @@ class HypostasRuntime:
                 elif self.path == "/runtime/relationships/reconnect":
                     body = json.dumps({"candidates": runtime.relationships.reconnect_candidates()}).encode()
                     self._respond(200, body)
+                elif self.path.startswith("/runtime/context"):
+                    try:
+                        parsed = urlparse(self.path)
+                        qs = parse_qs(parsed.query)
+                        fmt = qs.get("format", ["standard"])[0]
+                        person = qs.get("person", [None])[0]
+                        text = runtime.assembler.assemble(fmt=fmt, person=person)
+                        body = json.dumps({
+                            "context": text,
+                            "format": fmt,
+                            "person": person,
+                            "chars": len(text),
+                            "snapshot": runtime.assembler.snapshot(),
+                        }).encode()
+                        self._respond(200, body)
+                    except Exception as exc:
+                        self._respond(500, json.dumps({"error": str(exc)}).encode())
                 else:
                     self._respond(404, b"Not found")
 
@@ -398,6 +427,25 @@ class HypostasRuntime:
                         self._respond(200, body)
                     except (ValueError, KeyError) as exc:
                         self._respond(400, json.dumps({"error": str(exc)}).encode())
+                    except Exception as exc:
+                        self._respond(500, json.dumps({"error": str(exc)}).encode())
+                elif self.path == "/runtime/context/prime":
+                    try:
+                        length = int(self.headers.get("Content-Length", 0))
+                        raw = self.rfile.read(length)
+                        payload = json.loads(raw) if raw else {}
+                        fmt = payload.get("format", "standard")
+                        person = payload.get("person")
+                        # Invalidate cache for fresh assembly
+                        runtime.assembler.invalidate(fmt=fmt, person=person)
+                        text = runtime.assembler.assemble(fmt=fmt, person=person)
+                        body = json.dumps({
+                            "context": text,
+                            "format": fmt,
+                            "person": person,
+                            "chars": len(text),
+                        }).encode()
+                        self._respond(200, body)
                     except Exception as exc:
                         self._respond(500, json.dumps({"error": str(exc)}).encode())
                 elif self.path == "/runtime/relationships/event":
