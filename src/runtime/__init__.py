@@ -34,10 +34,11 @@ from .context_assembler import ContextAssembler
 from .response_engine import ResponseEngine
 from .proactive_engine import ProactiveEngine
 from .proactive_dispatcher import ProactiveDispatcher
+from .channel_bridge import ChannelBridge
 
 logger = logging.getLogger("pulse.runtime")
 
-__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine", "RelationshipGraph", "ContextAssembler", "ResponseEngine", "ProactiveEngine", "ProactiveDispatcher"]
+__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine", "RelationshipGraph", "ContextAssembler", "ResponseEngine", "ProactiveEngine", "ProactiveDispatcher", "ChannelBridge"]
 
 
 class HypostasRuntime:
@@ -124,6 +125,7 @@ class HypostasRuntime:
             episodic=self.episodic,
             state=self.state,
         )
+        self.channel_bridge: ChannelBridge = ChannelBridge(runtime=self)
         self.thought_loop: ThoughtLoop = ThoughtLoop(
             self.state,
             self.context,
@@ -288,6 +290,7 @@ class HypostasRuntime:
             "response": self.response.status(),
             "proactive": self.proactive.snapshot(),
             "dispatcher": self.dispatcher.status(),
+            "channel_bridge": self.channel_bridge.status(),
         }
 
     # ------------------------------------------------------------------
@@ -342,6 +345,9 @@ class HypostasRuntime:
                 elif self.path == "/runtime/proactive/top":
                     top = runtime.proactive.top_candidate()
                     body = json.dumps({"top": top.to_dict() if top else None}).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/bridge/status":
+                    body = json.dumps(runtime.channel_bridge.status()).encode()
                     self._respond(200, body)
                 elif self.path.startswith("/runtime/context"):
                     try:
@@ -501,6 +507,77 @@ class HypostasRuntime:
                             max_tokens=max_tokens,
                         )
                         self._respond(200, json.dumps(result.to_dict()).encode())
+                    except Exception as exc:
+                        self._respond(500, json.dumps({"error": str(exc)}).encode())
+                elif self.path == "/runtime/bridge/receive":
+                    try:
+                        length = int(self.headers.get("Content-Length", 0))
+                        raw = self.rfile.read(length)
+                        payload = json.loads(raw) if raw else {}
+                        message = str(payload.get("message", "")).strip()
+                        if not message:
+                            self._respond(400, json.dumps({"error": "missing message"}).encode())
+                            return
+                        person = str(payload.get("person", "josh"))
+                        channel = str(payload.get("channel", "local"))
+                        fmt = str(payload.get("format", "compact"))
+                        max_tokens = int(payload.get("max_tokens", 400))
+                        deliver = bool(payload.get("deliver", False))
+
+                        if deliver:
+                            result = runtime.channel_bridge.receive_and_send(
+                                message,
+                                person=person,
+                                channel=channel,
+                                fmt=fmt,
+                                max_tokens=max_tokens,
+                            )
+                            self._respond(200, json.dumps(result).encode())
+                        else:
+                            text = runtime.channel_bridge.receive(
+                                message,
+                                person=person,
+                                channel=channel,
+                                fmt=fmt,
+                                max_tokens=max_tokens,
+                            )
+                            self._respond(200, json.dumps({"text": text, "person": person, "channel": channel}).encode())
+                    except (ValueError, KeyError) as exc:
+                        self._respond(400, json.dumps({"error": str(exc)}).encode())
+                    except Exception as exc:
+                        self._respond(500, json.dumps({"error": str(exc)}).encode())
+                elif self.path == "/runtime/bridge/send":
+                    try:
+                        length = int(self.headers.get("Content-Length", 0))
+                        raw = self.rfile.read(length)
+                        payload = json.loads(raw) if raw else {}
+                        message = str(payload.get("message", "")).strip()
+                        if not message:
+                            self._respond(400, json.dumps({"error": "missing message"}).encode())
+                            return
+                        channel = str(payload.get("channel", "local"))
+                        person = payload.get("person")
+                        ok = runtime.channel_bridge.send(message, channel=channel, person=person)
+                        self._respond(200, json.dumps({"ok": bool(ok), "channel": channel, "person": person}).encode())
+                    except (ValueError, KeyError) as exc:
+                        self._respond(400, json.dumps({"error": str(exc)}).encode())
+                    except Exception as exc:
+                        self._respond(500, json.dumps({"error": str(exc)}).encode())
+                elif self.path == "/runtime/bridge/proactive":
+                    try:
+                        length = int(self.headers.get("Content-Length", 0))
+                        raw = self.rfile.read(length)
+                        payload = json.loads(raw) if raw else {}
+                        person = str(payload.get("person", "josh"))
+                        channel = payload.get("channel")
+                        max_tokens = int(payload.get("max_tokens", 250))
+                        result = runtime.channel_bridge.deliver_proactive(
+                            person=person,
+                            channel=str(channel) if channel else None,
+                            max_tokens=max_tokens,
+                        )
+                        status_code = 200 if result.get("dispatched") else 204
+                        self._respond(status_code, json.dumps(result).encode())
                     except Exception as exc:
                         self._respond(500, json.dumps({"error": str(exc)}).encode())
                 elif self.path == "/runtime/proactive/sent":
