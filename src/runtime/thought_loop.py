@@ -276,7 +276,9 @@ class ThoughtLoop:
         with self._lock:
             self._running = False
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=OLLAMA_TIMEOUT + 5)
+            # Do not block shutdown on a long/slow Ollama request.
+            # The ThoughtLoop thread is daemonized; best-effort join keeps stop() responsive.
+            self._thread.join(timeout=5)
 
     def notify_session_start(self) -> None:
         """Called by RuntimeBridge when a Pulse session begins."""
