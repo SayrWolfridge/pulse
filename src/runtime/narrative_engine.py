@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from .episodic_buffer import EpisodicBuffer
     from .goal_engine import GoalEngine
     from .context_engine import ContextEngine
+    from .emotion_engine import EmotionEngine
 
 logger = logging.getLogger("pulse.runtime.narrative_engine")
 
@@ -100,6 +101,7 @@ class NarrativeEngine:
         episodic: "EpisodicBuffer",
         goal_engine: "GoalEngine",
         context: Optional["ContextEngine"] = None,
+        emotion: Optional["EmotionEngine"] = None,
         ttl_seconds: int = CACHE_TTL_SECONDS,
     ) -> None:
         self._state = state
@@ -107,6 +109,7 @@ class NarrativeEngine:
         self._episodic = episodic
         self._goal_engine = goal_engine
         self._context = context
+        self._emotion = emotion
         self._ttl = ttl_seconds
 
         self._lock = threading.RLock()
@@ -252,7 +255,15 @@ class NarrativeEngine:
             logger.warning("NarrativeEngine: GoalEngine source failed: %s", exc)
             sources["active_goals"] = []
 
-        # 4. ContextEngine — relationship context (Josh)
+        # 4. EmotionEngine — current emotional colour
+        if self._emotion is not None:
+            try:
+                sources["emotion_fragment"] = self._emotion.get_narrative_fragment()
+                sources["emotion_color"] = self._emotion.get_color()
+            except Exception as exc:
+                logger.warning("NarrativeEngine: EmotionEngine source failed: %s", exc)
+
+        # 5. ContextEngine — relationship context (Josh)
         if self._context is not None:
             try:
                 josh = self._context.get_relationship_context("Josh")
@@ -318,6 +329,11 @@ class NarrativeEngine:
             title = top.get("title", "").strip()
             if title:
                 parts.append(f"Most recently: {title}.")
+
+        # ── FEEL — emotional colour ───────────────────────────────────
+        emo = (sources.get("emotion_fragment") or "").strip()
+        if emo:
+            parts.append(emo)
 
         # ── HOLD — top want + growth edge ─────────────────────────────
         wants = sources.get("wants", [])

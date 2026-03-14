@@ -27,10 +27,11 @@ from .self_model import SelfModel
 from .goal_engine import GoalEngine
 from .episodic_buffer import EpisodicBuffer
 from .narrative_engine import NarrativeEngine
+from .emotion_engine import EmotionEngine
 
 logger = logging.getLogger("pulse.runtime")
 
-__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine"]
+__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine"]
 
 
 class HypostasRuntime:
@@ -73,12 +74,14 @@ class HypostasRuntime:
         self.self_model: SelfModel = SelfModel(self.state)
         self.goal_engine: GoalEngine = GoalEngine(self.state)
         self.episodic: EpisodicBuffer = EpisodicBuffer(self.state, path=self._state_dir / "episodes.jsonl")
+        self.emotion: EmotionEngine = EmotionEngine(self.state, episodic=self.episodic)
         self.narrative: NarrativeEngine = NarrativeEngine(
             state=self.state,
             self_model=self.self_model,
             episodic=self.episodic,
             goal_engine=self.goal_engine,
             context=self.context,
+            emotion=self.emotion,
         )
         self.thought_loop: ThoughtLoop = ThoughtLoop(
             self.state,
@@ -238,6 +241,7 @@ class HypostasRuntime:
             "goals": self.goal_engine.status(),
             "episodic": self.episodic.status(),
             "narrative": self.narrative.snapshot(),
+            "emotion": self.emotion.status(),
         }
 
     # ------------------------------------------------------------------
@@ -273,6 +277,12 @@ class HypostasRuntime:
                     self._respond(200, body)
                 elif self.path == "/runtime/narrative":
                     body = json.dumps(runtime.narrative.snapshot()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/emotion":
+                    body = json.dumps(runtime.emotion.snapshot()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/emotion/events":
+                    body = json.dumps({"events": runtime.emotion.known_events()}).encode()
                     self._respond(200, body)
                 else:
                     self._respond(404, b"Not found")
@@ -336,6 +346,45 @@ class HypostasRuntime:
 
                         result = {"ok": ok, "goals": runtime.goal_engine.status()}
                         self._respond(200, json.dumps(result).encode())
+                    except Exception as exc:
+                        self._respond(500, json.dumps({"error": str(exc)}).encode())
+                elif self.path == "/runtime/emotion/event":
+                    try:
+                        length = int(self.headers.get("Content-Length", 0))
+                        raw = self.rfile.read(length)
+                        payload = json.loads(raw)
+                        event_name = payload.get("event", "")
+                        note = payload.get("note", "")
+                        applied = runtime.emotion.apply_event(event_name, note=note)
+                        body = json.dumps({
+                            "ok": True,
+                            "event": event_name,
+                            "applied": applied,
+                            "emotion": runtime.emotion.status(),
+                        }).encode()
+                        self._respond(200, body)
+                    except (ValueError, KeyError) as exc:
+                        self._respond(400, json.dumps({"error": str(exc)}).encode())
+                    except Exception as exc:
+                        self._respond(500, json.dumps({"error": str(exc)}).encode())
+                elif self.path == "/runtime/emotion/update":
+                    try:
+                        length = int(self.headers.get("Content-Length", 0))
+                        raw = self.rfile.read(length)
+                        payload = json.loads(raw)
+                        emotion_name = payload.get("emotion", "")
+                        delta = float(payload.get("delta", 0))
+                        reason = payload.get("reason", "")
+                        new_val = runtime.emotion.update(emotion_name, delta, reason=reason)
+                        body = json.dumps({
+                            "ok": True,
+                            "emotion": emotion_name,
+                            "new_value": new_val,
+                            "state": runtime.emotion.status(),
+                        }).encode()
+                        self._respond(200, body)
+                    except (ValueError, KeyError) as exc:
+                        self._respond(400, json.dumps({"error": str(exc)}).encode())
                     except Exception as exc:
                         self._respond(500, json.dumps({"error": str(exc)}).encode())
                 else:
