@@ -105,13 +105,22 @@ class _OllamaClient:
         max_tokens: int = DEFAULT_MAX_TOKENS,
         *,
         timeout_s: Optional[int] = None,
+        model: Optional[str] = None,
     ) -> tuple[str, int]:
         """
         Send a chat request to Ollama.  Returns (response_text, token_count).
         Raises RuntimeError on failure so caller can fall back gracefully.
+
+        Parameters
+        ----------
+        model:
+            Override the instance-level model for this call only.  Useful for
+            routing proactive/ambient messages through a faster model (e.g.
+            ``qwen3.5:9b``) while keeping iris-70b for real conversations.
         """
+        resolved_model = model if model is not None else self.model
         payload = json.dumps({
-            "model": self.model,
+            "model": resolved_model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user",   "content": user},
@@ -134,6 +143,8 @@ class _OllamaClient:
         tokens: int = data.get("eval_count", len(text.split()))
         if not text:
             raise RuntimeError("Ollama returned empty response")
+        # report which model actually ran (for logging)
+        used_model = data.get("model", resolved_model)
         return text, tokens
 
     def available(self) -> bool:
@@ -210,6 +221,7 @@ class ResponseEngine:
         fmt: str = "compact",
         max_tokens: int = DEFAULT_MAX_TOKENS,
         timeout_s: Optional[int] = None,
+        model: Optional[str] = None,
     ) -> ResponseResult:
         """
         Generate a response to *message*.
@@ -226,6 +238,10 @@ class ResponseEngine:
             or ``"full"``.
         max_tokens:
             Maximum tokens for the Ollama call.
+        model:
+            Override model for this call only.  Pass ``"qwen3.5:9b"`` (or
+            another small fast model) for proactive/ambient messages that need
+            low latency.  Defaults to the engine-level model (iris-70b-v4).
         """
         t0 = time.monotonic()
 
@@ -243,6 +259,7 @@ class ResponseEngine:
                 user=user_prompt,
                 max_tokens=max_tokens,
                 timeout_s=timeout_s,
+                model=model,
             )
         except Exception as exc:
             logger.warning("Ollama unavailable (%s) — using fallback response", exc)
@@ -269,9 +286,10 @@ class ResponseEngine:
             self._state.set("response_engine.count", self._response_count)
             self._state.set("response_engine.last_ts", datetime.now(timezone.utc).isoformat())
 
+        resolved_model = model if model is not None else self._client.model
         result = ResponseResult(
             text=response_text,
-            model=self._client.model,
+            model=resolved_model,
             tokens=tokens,
             context_chars=len(context_block),
             episode_id=episode_id,
@@ -281,8 +299,8 @@ class ResponseEngine:
         )
 
         logger.info(
-            "respond | person=%s fmt=%s tokens=%d elapsed=%dms fallback=%s",
-            person, fmt, tokens, elapsed_ms, fallback,
+            "respond | person=%s fmt=%s model=%s tokens=%d elapsed=%dms fallback=%s",
+            person, fmt, resolved_model, tokens, elapsed_ms, fallback,
         )
         return result
 

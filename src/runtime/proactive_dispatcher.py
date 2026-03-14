@@ -82,6 +82,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger("pulse.runtime.proactive_dispatcher")
 
 # ---------------------------------------------------------------------------
+# Model routing
+# ---------------------------------------------------------------------------
+
+# Proactive/ambient messages use a fast model so they don't block or timeout.
+# Real Josh conversations in ResponseEngine keep iris-70b-v4 for quality.
+PROACTIVE_MODEL = "qwen3.5:9b"
+PROACTIVE_TIMEOUT_S = 30  # 9B model generates in <5s typically; 30s is safe headroom
+
+# ---------------------------------------------------------------------------
 # Delivery modes
 # ---------------------------------------------------------------------------
 
@@ -262,16 +271,18 @@ class ProactiveDispatcher:
         """
         prompt = self._build_proactive_prompt(candidate)
         try:
-            # Proactive outreach must be fast; fall back to message_hint if the
-            # local model is slow/unavailable.
+            # Route proactive messages through a fast model (qwen3.5:9b) so we
+            # don't block waiting for iris-70b-v4 (42GB, 15-30s/response).
+            # iris-70b-v4 is reserved for real conversations via /runtime/respond.
             result = self._response.respond(
                 message=prompt,
                 person=person,
                 max_tokens=min(max_tokens, 120),
-                timeout_s=2,
+                timeout_s=PROACTIVE_TIMEOUT_S,
+                model=PROACTIVE_MODEL,
             )
             if result.fallback:
-                # Ollama down — ResponseEngine gave minimal fallback; use hint instead
+                # Ollama down entirely — use hint directly
                 return candidate.message_hint, True
             return result.text, False
         except Exception as exc:

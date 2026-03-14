@@ -81,7 +81,7 @@ class _FakeResponse:
         self._result = result or _ResponseResult()
         self._raise = raise_exc
 
-    def respond(self, message, person=None, fmt="compact", max_tokens=400, timeout_s=None):
+    def respond(self, message, person=None, fmt="compact", max_tokens=400, timeout_s=None, model=None):
         if self._raise:
             raise ConnectionRefusedError("Ollama unavailable")
         return self._result
