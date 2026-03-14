@@ -31,10 +31,11 @@ from .narrative_engine import NarrativeEngine
 from .emotion_engine import EmotionEngine
 from .relationship_graph import RelationshipGraph
 from .context_assembler import ContextAssembler
+from .response_engine import ResponseEngine
 
 logger = logging.getLogger("pulse.runtime")
 
-__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine", "RelationshipGraph", "ContextAssembler"]
+__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine", "RelationshipGraph", "ContextAssembler", "ResponseEngine"]
 
 
 class HypostasRuntime:
@@ -99,6 +100,14 @@ class HypostasRuntime:
             narrative=self.narrative,
             emotion=self.emotion,
             relationships=self.relationships,
+        )
+        self.response: ResponseEngine = ResponseEngine(
+            assembler=self.assembler,
+            narrative=self.narrative,
+            emotion=self.emotion,
+            episodic=self.episodic,
+            self_model=self.self_model,
+            state=self.state,
         )
         self.thought_loop: ThoughtLoop = ThoughtLoop(
             self.state,
@@ -261,6 +270,7 @@ class HypostasRuntime:
             "emotion": self.emotion.status(),
             "relationships": self.relationships.status() if hasattr(self.relationships, "status") else {"count": len(self.context.get_all_relationships() or {})},
             "assembler": self.assembler.snapshot(),
+            "response": self.response.status(),
         }
 
     # ------------------------------------------------------------------
@@ -446,6 +456,27 @@ class HypostasRuntime:
                             "chars": len(text),
                         }).encode()
                         self._respond(200, body)
+                    except Exception as exc:
+                        self._respond(500, json.dumps({"error": str(exc)}).encode())
+                elif self.path == "/runtime/respond":
+                    try:
+                        length = int(self.headers.get("Content-Length", 0))
+                        raw = self.rfile.read(length)
+                        payload = json.loads(raw) if raw else {}
+                        message = str(payload.get("message", "")).strip()
+                        if not message:
+                            self._respond(400, json.dumps({"error": "missing message"}).encode())
+                            return
+                        person = payload.get("person")
+                        fmt = payload.get("format", "compact")
+                        max_tokens = int(payload.get("max_tokens", 400))
+                        result = runtime.response.respond(
+                            message,
+                            person=person,
+                            fmt=fmt,
+                            max_tokens=max_tokens,
+                        )
+                        self._respond(200, json.dumps(result.to_dict()).encode())
                     except Exception as exc:
                         self._respond(500, json.dumps({"error": str(exc)}).encode())
                 elif self.path == "/runtime/relationships/event":

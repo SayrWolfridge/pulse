@@ -124,6 +124,12 @@ EVENT_MAP: Dict[str, Dict[str, float]] = {
         "curiosity": +0.20,
         "frustration": -0.10,
     },
+    # Messaging
+    "MESSAGE_SENT": {
+        "joy": +0.05,
+        "pride": +0.05,
+        "frustration": -0.05,
+    },
     "CREATIVE_OUTPUT": {
         "joy": +0.20,
         "pride": +0.30,
