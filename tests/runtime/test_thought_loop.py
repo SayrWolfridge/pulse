@@ -14,6 +14,7 @@ All Ollama calls are mocked. Tests verify:
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 import threading
 import time
 import unittest
@@ -561,6 +562,22 @@ class TestCompress(unittest.TestCase):
         start_ts = _date_to_ts(yesterday)
         context.hot._entries = [
             {"type": "EVT", "content": "test", "ts": start_ts + 3600},
+        ]
+        ollama = MagicMock(spec=OllamaClient)
+        loop = ThoughtLoop(state, context, ollama=ollama)
+        result = loop._maybe_compress()
+        self.assertEqual(result, yesterday)
+        self.assertIn(yesterday, context.warm._data)
+
+    def test_compress_accepts_iso_ts_strings(self):
+        """Regression: hot-tier entries may store ISO timestamps."""
+        state = FakeState()
+        context = FakeContext()
+        yesterday = _yesterday_date()
+        start_ts = _date_to_ts(yesterday)
+        iso_ts = datetime.fromtimestamp(start_ts + 3600, tz=timezone.utc).isoformat()
+        context.hot._entries = [
+            {"type": "EVT", "content": "test", "ts": iso_ts},
         ]
         ollama = MagicMock(spec=OllamaClient)
         loop = ThoughtLoop(state, context, ollama=ollama)

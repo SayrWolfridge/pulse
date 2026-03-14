@@ -550,7 +550,26 @@ class ThoughtLoop:
             start_ts = _date_to_ts(yesterday)
             end_ts = start_ts + 86400.0
             all_entries = self.context.hot.get_all()
-            day_entries = [e for e in all_entries if start_ts <= e.get("ts", 0) < end_ts]
+
+            def _entry_ts(entry: dict) -> float:
+                """Return a numeric timestamp for a hot-tier entry.
+
+                Hot-tier entries historically used float epoch seconds, but some
+                producers write ISO-8601 strings. ThoughtLoop must handle both.
+                """
+                ts = entry.get("ts", 0)
+                if isinstance(ts, (int, float)):
+                    return float(ts)
+                if isinstance(ts, str):
+                    try:
+                        # Accept 'Z' suffix as UTC
+                        iso = ts.replace("Z", "+00:00")
+                        return datetime.fromisoformat(iso).timestamp()
+                    except Exception:
+                        return 0.0
+                return 0.0
+
+            day_entries = [e for e in all_entries if start_ts <= _entry_ts(e) < end_ts]
 
             if not day_entries:
                 return None
