@@ -328,12 +328,24 @@ class GoalEngine:
         return "\n".join(lines)
 
     def snapshot(self) -> dict:
-        """Full JSON-serialisable snapshot."""
+        """Full JSON-serialisable snapshot.
+
+        Note: this method is consumed by multiple runtime layers.
+        We expose both the newer keys (active/completed) and compatibility
+        aliases (active_goals/completed_goals) so other engines can rely on
+        a stable shape.
+        """
         with self._lock:
+            active = [dict(g) for g in self._goals if g["status"] == "active"]
+            completed = [dict(g) for g in self._goals if g["status"] == "completed"]
             return {
                 "loaded": self._loaded,
-                "active": [dict(g) for g in self._goals if g["status"] == "active"],
-                "completed": [dict(g) for g in self._goals if g["status"] == "completed"],
+                # Primary keys
+                "active": active,
+                "completed": completed,
+                # Compatibility aliases (used by ContextAssembler + older tests)
+                "active_goals": active,
+                "completed_goals": completed,
                 "pressure": self.pressure(),
             }
 
