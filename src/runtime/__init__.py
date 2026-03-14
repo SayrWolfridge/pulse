@@ -32,10 +32,11 @@ from .emotion_engine import EmotionEngine
 from .relationship_graph import RelationshipGraph
 from .context_assembler import ContextAssembler
 from .response_engine import ResponseEngine
+from .proactive_engine import ProactiveEngine
 
 logger = logging.getLogger("pulse.runtime")
 
-__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine", "RelationshipGraph", "ContextAssembler", "ResponseEngine"]
+__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine", "RelationshipGraph", "ContextAssembler", "ResponseEngine", "ProactiveEngine"]
 
 
 class HypostasRuntime:
@@ -108,6 +109,13 @@ class HypostasRuntime:
             episodic=self.episodic,
             self_model=self.self_model,
             state=self.state,
+        )
+        self.proactive: ProactiveEngine = ProactiveEngine(
+            state=self.state,
+            emotion=self.emotion,
+            goal_engine=self.goal_engine,
+            relationships=self.relationships,
+            episodic=self.episodic,
         )
         self.thought_loop: ThoughtLoop = ThoughtLoop(
             self.state,
@@ -271,6 +279,7 @@ class HypostasRuntime:
             "relationships": self.relationships.status() if hasattr(self.relationships, "status") else {"count": len(self.context.get_all_relationships() or {})},
             "assembler": self.assembler.snapshot(),
             "response": self.response.status(),
+            "proactive": self.proactive.snapshot(),
         }
 
     # ------------------------------------------------------------------
@@ -318,6 +327,13 @@ class HypostasRuntime:
                     self._respond(200, body)
                 elif self.path == "/runtime/relationships/reconnect":
                     body = json.dumps({"candidates": runtime.relationships.reconnect_candidates()}).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/proactive":
+                    body = json.dumps(runtime.proactive.snapshot()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/proactive/top":
+                    top = runtime.proactive.top_candidate()
+                    body = json.dumps({"top": top.to_dict() if top else None}).encode()
                     self._respond(200, body)
                 elif self.path.startswith("/runtime/context"):
                     try:
@@ -477,6 +493,28 @@ class HypostasRuntime:
                             max_tokens=max_tokens,
                         )
                         self._respond(200, json.dumps(result.to_dict()).encode())
+                    except Exception as exc:
+                        self._respond(500, json.dumps({"error": str(exc)}).encode())
+                elif self.path == "/runtime/proactive/sent":
+                    try:
+                        length = int(self.headers.get("Content-Length", 0))
+                        raw = self.rfile.read(length)
+                        payload = json.loads(raw) if raw else {}
+                        kind = str(payload.get("kind", "")).strip()
+                        if not kind:
+                            self._respond(400, json.dumps({"error": "missing kind"}).encode())
+                            return
+                        runtime.proactive.mark_sent(kind)
+                        # Optional: mark milestone goal ids as announced
+                        if kind == "milestone":
+                            goal_ids = payload.get("goal_ids") or []
+                            if isinstance(goal_ids, list) and goal_ids:
+                                existing = set(runtime.state.get("proactive.announced_goal_ids") or [])
+                                for gid in goal_ids:
+                                    if gid:
+                                        existing.add(str(gid))
+                                runtime.state.set("proactive.announced_goal_ids", sorted(existing))
+                        self._respond(200, json.dumps({"ok": True, "kind": kind}).encode())
                     except Exception as exc:
                         self._respond(500, json.dumps({"error": str(exc)}).encode())
                 elif self.path == "/runtime/relationships/event":
