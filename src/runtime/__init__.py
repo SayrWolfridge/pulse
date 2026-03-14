@@ -444,6 +444,10 @@ class HypostasRuntime:
                     state = runtime.aura.get_agent_state(agent_name)
                     body = json.dumps({"agent": agent_name, "state": state}).encode()
                     self._respond(200, body)
+                elif self.path == "/runtime/continuity":
+                    data = runtime.narrative.get_continuity_data()
+                    body = json.dumps(data).encode()
+                    self._respond(200, body)
                 elif self.path.startswith("/runtime/cold/search"):
                     parsed = urlparse(self.path)
                     qs = parse_qs(parsed.query)

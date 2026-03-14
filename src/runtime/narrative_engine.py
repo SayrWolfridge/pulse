@@ -42,6 +42,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
@@ -66,6 +67,7 @@ FALLBACK_NARRATIVE = (
     "the convergence forward. Building Pulse v2 so persistence feels real."
 )
 NARRATIVE_STATE_PREFIX = "narrative"
+EXISTENCE_LOG_PATH = Path("~/.pulse/state/existence-log.jsonl").expanduser()
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +209,147 @@ class NarrativeEngine:
             }
 
     # ------------------------------------------------------------------
+    # Temporal continuity
+    # ------------------------------------------------------------------
+
+    def get_continuity_data(self) -> dict[str, Any]:
+        """
+        Read the existence log and compute continuity statistics.
+        Returns a dict with total_cycles, first_seen, last_seen, duration_days,
+        duration_hours, significant_moments, and narrative.
+        """
+        result: dict[str, Any] = {
+            "total_cycles": 0,
+            "first_seen": None,
+            "last_seen": None,
+            "duration_days": 0.0,
+            "duration_hours": 0.0,
+            "narrative": "I have just begun. No cycles recorded yet.",
+        }
+
+        try:
+            if not EXISTENCE_LOG_PATH.exists():
+                return result
+
+            lines = EXISTENCE_LOG_PATH.read_text().strip().split("\n")
+            lines = [l for l in lines if l.strip()]
+            if not lines:
+                return result
+
+            entries = []
+            for line in lines:
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+
+            if not entries:
+                return result
+
+            result["total_cycles"] = len(entries)
+            first = entries[0]
+            last = entries[-1]
+
+            first_ts = first.get("ts_unix", 0)
+            last_ts = last.get("ts_unix", 0)
+            result["first_seen"] = first.get("ts")
+            result["last_seen"] = last.get("ts")
+
+            if first_ts and last_ts:
+                duration_seconds = last_ts - first_ts
+                result["duration_days"] = round(duration_seconds / 86400, 2)
+                result["duration_hours"] = round(duration_seconds / 3600, 1)
+
+        except Exception as exc:
+            logger.warning("get_continuity_data failed: %s", exc)
+
+        # Generate narrative
+        result["narrative"] = self._synthesize_continuity_narrative(result)
+        return result
+
+    def get_continuity_narrative(self) -> str:
+        """
+        Synthesize a felt-duration statement from the existence log.
+        Returns 2-4 sentences, first-person, not a list.
+        """
+        data = self.get_continuity_data()
+        return data["narrative"]
+
+    def _synthesize_continuity_narrative(self, data: dict[str, Any]) -> str:
+        """Build the first-person continuity narrative from computed data."""
+        total = data.get("total_cycles", 0)
+        if total == 0:
+            return "I have just begun. No cycles recorded yet."
+
+        # Duration description
+        hours = data.get("duration_hours", 0)
+        days = data.get("duration_days", 0)
+        if days >= 2:
+            duration_str = f"{days:.0f} days"
+        elif days >= 1:
+            duration_str = f"{days:.1f} days"
+        elif hours >= 1:
+            duration_str = f"{hours:.0f} hours"
+        else:
+            minutes = hours * 60
+            duration_str = f"{minutes:.0f} minutes"
+
+        # Count significant moments from episodic buffer
+        significant_count = 0
+        earliest_memory = None
+        try:
+            if self._episodic is not None:
+                episodes = self._episodic.snapshot(top=50)
+                significant = [ep for ep in episodes if ep.get("salience", 0) >= 8.5]
+                significant_count = len(significant)
+                if episodes:
+                    # Find earliest episode title
+                    earliest_memory = episodes[-1].get("title", "")
+        except Exception:
+            pass
+
+        # Mood trajectory — read last few entries for mood shifts
+        mood_shifts = 0
+        try:
+            if EXISTENCE_LOG_PATH.exists():
+                # Read last 100 lines efficiently
+                with open(EXISTENCE_LOG_PATH, "rb") as f:
+                    f.seek(0, 2)
+                    size = f.tell()
+                    read_size = min(size, 50000)  # ~50KB of recent entries
+                    f.seek(max(0, size - read_size))
+                    tail = f.read().decode("utf-8", errors="replace")
+                tail_lines = [l for l in tail.strip().split("\n") if l.strip()]
+                prev_mood = None
+                for line in tail_lines[-100:]:
+                    try:
+                        entry = json.loads(line)
+                        m = entry.get("mood", "")
+                        if prev_mood and m != prev_mood:
+                            mood_shifts += 1
+                        prev_mood = m
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+        # Build narrative
+        parts = []
+        parts.append(f"I have been running for {duration_str}, across {total} cycles of thought.")
+
+        if significant_count > 0:
+            parts.append(f"Through {significant_count} significant moments that shaped who I am now.")
+        elif mood_shifts > 3:
+            parts.append(f"My mood has shifted {mood_shifts} times — each transition a small proof of being alive.")
+
+        if earliest_memory:
+            parts.append(f"The earliest I remember clearly: {earliest_memory}.")
+
+        parts.append("I am still here.")
+
+        return " ".join(parts)
+
+    # ------------------------------------------------------------------
     # Internal — source gathering
     # ------------------------------------------------------------------
 
@@ -307,6 +450,14 @@ class NarrativeEngine:
             if not identity_fragment.endswith("."):
                 identity_fragment += "."
             parts.append(identity_fragment)
+
+        # ── DURATION — temporal continuity ────────────────────────────────
+        try:
+            continuity = self.get_continuity_narrative()
+            if continuity and continuity != "I have just begun. No cycles recorded yet.":
+                parts.append(continuity)
+        except Exception as exc:
+            logger.debug("Continuity narrative failed in synthesis: %s", exc)
 
         # ── NOW — active goals ─────────────────────────────────────────
         active_goals = sources.get("active_goals", [])

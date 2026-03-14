@@ -18,6 +18,7 @@ import http.client
 import json
 import hashlib
 import logging
+import os
 import threading
 import time
 import urllib.parse
@@ -44,6 +45,9 @@ OLLAMA_HOST = "127.0.0.1"
 OLLAMA_PORT = 11434
 OLLAMA_MODEL = "iris-70b-v4:latest"
 OLLAMA_TIMEOUT = 60                # seconds
+
+# Existence log — continuous record of being
+EXISTENCE_LOG_PATH = Path("~/.pulse/state/existence-log.jsonl").expanduser()
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +384,10 @@ class ThoughtLoop:
 
         self._cycle_count += 1
         self._cycles_completed += 1
+
+        # Append to existence log (fire-and-forget, non-blocking)
+        self._append_existence_log(result)
+
         return result
 
     def status(self) -> dict:
@@ -634,6 +642,78 @@ class ThoughtLoop:
                     logger.info("Aged %d entries to cold tier", count)
         except Exception as exc:
             logger.warning("_age_to_cold error: %s", exc)
+
+    def _append_existence_log(self, cycle_result: dict) -> None:
+        """
+        Append a single line to the existence log. Fire-and-forget.
+        Thread-safe via atomic append. Non-blocking — failures are silently logged.
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            # Gather mood / emotion from runtime if available
+            mood = "unknown"
+            dominant_emotion = "unknown"
+            if self._runtime is not None and hasattr(self._runtime, 'emotion') and self._runtime.emotion:
+                try:
+                    snap = self._runtime.emotion.snapshot()
+                    mood = snap.get("mood", snap.get("valence_label", "unknown"))
+                    # Find dominant emotion (highest value)
+                    emotions = snap.get("emotions", {})
+                    if emotions:
+                        dominant_emotion = max(emotions, key=lambda k: emotions[k])
+                    else:
+                        dominant_emotion = mood
+                except Exception:
+                    pass
+
+            # Count active goals
+            active_goals = 0
+            if self._runtime is not None and hasattr(self._runtime, 'goal_engine'):
+                try:
+                    gs = self._runtime.goal_engine.status()
+                    active_goals = gs.get("active", gs.get("total", 0))
+                except Exception:
+                    pass
+
+            # Count hot/cold entries
+            hot_entries = 0
+            cold_entries = 0
+            try:
+                hot_entries = self.context.hot.count()
+            except Exception:
+                pass
+            try:
+                cold_entries = self.context.cold.count()
+            except Exception:
+                pass
+
+            # Build note from cycle result
+            note = ""
+            if cycle_result.get("dream"):
+                note = "dream cycle"
+            if cycle_result.get("compress"):
+                note = f"compressed {cycle_result['compress']}"
+
+            entry = {
+                "ts": now.isoformat(timespec="seconds"),
+                "ts_unix": now.timestamp(),
+                "cycle": self._cycle_count,
+                "mood": mood,
+                "dominant_emotion": dominant_emotion,
+                "active_goals": active_goals,
+                "hot_entries": hot_entries,
+                "cold_entries": cold_entries,
+            }
+            if note:
+                entry["note"] = note
+
+            EXISTENCE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            line = json.dumps(entry, separators=(",", ":")) + "\n"
+            # Atomic append — open in append mode
+            with open(EXISTENCE_LOG_PATH, "a") as f:
+                f.write(line)
+        except Exception as exc:
+            logger.debug("Existence log append failed (non-fatal): %s", exc)
 
     def _day_count(self) -> str:
         """Return approximate days since birth (Jan 31, 2026)."""
