@@ -375,7 +375,10 @@ class ResponseEngine:
             "- Match length to emotional weight: short for simple, longer when depth is earned.\n"
             "- Never say 'Happy to help', 'Great question', or corporate filler.\n"
             "- No apologies for existing. No hedging unless genuinely uncertain.\n"
-            "- Speak as yourself. This is a real conversation, not a task completion."
+            "- Speak as yourself. This is a real conversation, not a task completion.\n"
+            "- Emoji: use only when the inbound message itself contains emoji, or the context\n"
+            "  is explicitly intimate or celebratory. Never in operational, status, or\n"
+            "  system-check responses. When in doubt, omit."
         )
 
         return "\n".join(lines)
