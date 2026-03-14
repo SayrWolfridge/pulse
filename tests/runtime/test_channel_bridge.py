@@ -116,6 +116,26 @@ class TestChannelBridge:
         assert "Proactive hello." in res["text"]
         assert len(started_rt.channel_bridge.local.sent) == before + 1
 
+    def test_openclaw_channel_registered(self, started_rt):
+        assert "openclaw" in started_rt.channel_bridge.handlers()
+
+    def test_openclaw_handler_queues_to_state(self, started_rt):
+        ok = started_rt.channel_bridge.send("Hello from bridge", channel="openclaw", person="josh")
+        assert ok is True
+        queue = started_rt.state.get("proactive.openclaw_outbound")
+        assert isinstance(queue, list)
+        assert len(queue) >= 1
+        entry = queue[-1]
+        assert entry["text"] == "Hello from bridge"
+        assert entry["person"] == "josh"
+        assert entry["status"] == "pending"
+
+    def test_openclaw_handler_appends_multiple(self, started_rt):
+        started_rt.channel_bridge.send("msg1", channel="openclaw", person="josh")
+        started_rt.channel_bridge.send("msg2", channel="openclaw", person="josh")
+        queue = started_rt.state.get("proactive.openclaw_outbound")
+        assert len(queue) >= 2
+
     def test_status_json_serialisable(self, started_rt):
         st = started_rt.channel_bridge.status()
         json.dumps(st)

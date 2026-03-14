@@ -24,9 +24,12 @@ Delivery modes
     Useful for callers who handle their own transport.
 
 ``openclaw_wake``
-    Fires the message as a wake event to the Pulse daemon's OpenClaw runtime
-    (POST 127.0.0.1:9720/feedback with a systemEvent payload).  This injects
-    the outreach into the current session as if Iris wrote it herself.
+    Writes the message to StateEngine under ``proactive.openclaw_outbound`` so
+    the Pulse daemon (or an external sender process) can pick it up and inject
+    it into the current session.  Previous versions incorrectly POSTed to the
+    daemon's ``/feedback`` endpoint with ``outcome="proactive_outreach"`` —
+    that endpoint expects ``outcome`` in ``{success, failure}`` and is meant
+    for RL-lite drive decay, NOT outbound delivery.
 
 ``store``
     Writes the generated message to StateEngine under
@@ -62,14 +65,13 @@ HTTP (registered by HypostasRuntime)
 
 from __future__ import annotations
 
-import http.client
 import json
 import logging
 import threading
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from .proactive_engine import ProactiveEngine, ProactiveCandidate
@@ -89,11 +91,8 @@ MODE_STORE = "store"
 
 ALL_MODES = (MODE_RESPONSE_ONLY, MODE_OPENCLAW_WAKE, MODE_STORE)
 
-# OpenClaw / Pulse daemon feedback endpoint (same machine)
-OPENCLAW_FEEDBACK_HOST = "127.0.0.1"
-OPENCLAW_FEEDBACK_PORT = 9720
-OPENCLAW_FEEDBACK_PATH = "/feedback"
-OPENCLAW_TIMEOUT = 8
+# StateEngine key for openclaw_wake outbound queue
+OPENCLAW_OUTBOUND_KEY = "proactive.openclaw_outbound"
 
 # ---------------------------------------------------------------------------
 # Result
@@ -194,7 +193,7 @@ class ProactiveDispatcher:
         episode_id = ""
 
         if mode == MODE_OPENCLAW_WAKE:
-            error = self._deliver_openclaw(text)
+            error = self._deliver_openclaw(text, candidate)
         elif mode == MODE_STORE:
             self._deliver_store(text, candidate)
 
@@ -294,34 +293,51 @@ class ProactiveDispatcher:
             lines.insert(3, f"Context: {extras}")
         return "\n".join(lines)
 
-    def _deliver_openclaw(self, text: str) -> Optional[str]:
+    def _deliver_openclaw(self, text: str, candidate: "ProactiveCandidate") -> Optional[str]:
         """
-        POST the message as a wake event to the Pulse daemon feedback endpoint.
+        Write the outbound message to StateEngine under ``proactive.openclaw_outbound``.
+
+        The Pulse daemon (or an external sender process) reads this key and
+        injects the message into the active session.  This avoids the previous
+        bug of POSTing to ``/feedback`` with an invalid outcome value, which
+        would poison the RL-lite drive-decay learner.
+
+        Schema written to StateEngine::
+
+            {
+                "text":       str,   # generated message
+                "kind":       str,   # candidate kind (e.g. "morning_checkin")
+                "priority":   float, # candidate priority
+                "person":     str,   # target person (resolved later by sender)
+                "queued_at":  float, # epoch seconds
+                "queued_at_iso": str,# ISO 8601 UTC
+                "status":     "pending"
+            }
+
         Returns error string on failure, None on success.
         """
-        payload = json.dumps({
-            "drives_addressed": ["proactive"],
-            "outcome": "proactive_outreach",
-            "summary": text,
-        }).encode()
+        if self._state is None:
+            return "openclaw_wake requires StateEngine but none is configured"
         try:
-            conn = http.client.HTTPConnection(
-                OPENCLAW_FEEDBACK_HOST, OPENCLAW_FEEDBACK_PORT,
-                timeout=OPENCLAW_TIMEOUT,
-            )
-            conn.request(
-                "POST", OPENCLAW_FEEDBACK_PATH,
-                body=payload,
-                headers={"Content-Type": "application/json"},
-            )
-            resp = conn.getresponse()
-            resp.read()
-            conn.close()
-            if resp.status not in (200, 202, 204):
-                return f"feedback endpoint returned HTTP {resp.status}"
+            now = time.time()
+            entry = {
+                "text": text,
+                "kind": candidate.kind,
+                "priority": candidate.priority,
+                "person": "josh",
+                "queued_at": now,
+                "queued_at_iso": datetime.fromtimestamp(now, tz=timezone.utc).isoformat(),
+                "status": "pending",
+            }
+            # Append to outbound queue (list of pending deliveries)
+            existing: List[dict] = self._state.get(OPENCLAW_OUTBOUND_KEY) or []
+            if not isinstance(existing, list):
+                existing = []
+            existing.append(entry)
+            self._state.set(OPENCLAW_OUTBOUND_KEY, existing)
             return None
         except Exception as exc:
-            return f"openclaw_wake delivery failed: {exc}"
+            return f"openclaw_wake state write failed: {exc}"
 
     def _deliver_store(self, text: str, candidate: "ProactiveCandidate") -> None:
         """Write pending delivery to StateEngine for external pickup."""

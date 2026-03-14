@@ -91,6 +91,83 @@ class LocalHandler:
 
 
 # ---------------------------------------------------------------------------
+# OpenClaw handler — writes outbound messages to StateEngine for pickup
+# ---------------------------------------------------------------------------
+
+# StateEngine key where outbound messages are queued.
+OPENCLAW_OUTBOUND_KEY = "proactive.openclaw_outbound"
+
+
+class OpenClawHandler:
+    """Channel handler that queues outbound messages in StateEngine.
+
+    In OpenClaw production, direct outbound delivery is not possible from
+    within the Pulse runtime — the daemon owns the transport layer.  This
+    handler writes each outbound message to ``proactive.openclaw_outbound``
+    (a list of pending entries) so that the daemon or an external sender
+    process can pick them up and inject them into the active session.
+
+    Schema for each queued entry::
+
+        {
+            "text":          str,   # message body
+            "person":        str,   # target recipient
+            "channel":       str,   # originating channel name
+            "meta":          dict,  # caller-supplied metadata (kind, etc.)
+            "queued_at":     float, # epoch seconds
+            "queued_at_iso": str,   # ISO 8601 UTC
+            "status":        "pending"
+        }
+
+    External sender process responsibilities:
+      1. Read ``proactive.openclaw_outbound`` from StateEngine.
+      2. For each entry with ``status == "pending"``, deliver via the
+         daemon's native transport (e.g. Signal, Discord, webhook).
+      3. Update ``status`` to ``"sent"`` or ``"failed"`` after delivery.
+
+    If no StateEngine is available, ``send()`` returns ``False`` and logs a
+    warning — it does NOT crash.
+    """
+
+    def __init__(self, state: Any) -> None:
+        self._state = state
+        self._lock = threading.Lock()
+
+    def send(
+        self,
+        message: str,
+        *,
+        person: Optional[str] = None,
+        channel: Optional[str] = None,
+        meta: Optional[dict] = None,
+    ) -> bool:
+        if self._state is None:
+            logger.warning("OpenClawHandler: no StateEngine configured; cannot queue message")
+            return False
+        try:
+            now = time.time()
+            entry = {
+                "text": message,
+                "person": person or "unknown",
+                "channel": channel or "openclaw",
+                "meta": meta or {},
+                "queued_at": now,
+                "queued_at_iso": datetime.fromtimestamp(now, tz=timezone.utc).isoformat(),
+                "status": "pending",
+            }
+            with self._lock:
+                existing = self._state.get(OPENCLAW_OUTBOUND_KEY) or []
+                if not isinstance(existing, list):
+                    existing = []
+                existing.append(entry)
+                self._state.set(OPENCLAW_OUTBOUND_KEY, existing)
+            return True
+        except Exception as exc:
+            logger.warning("OpenClawHandler.send failed: %s", exc)
+            return False
+
+
+# ---------------------------------------------------------------------------
 # ChannelBridge
 # ---------------------------------------------------------------------------
 
@@ -132,8 +209,17 @@ class ChannelBridge:
         self._local = LocalHandler()
         self._stats = BridgeStats()
 
-        # Default channel always available.
+        # Default channels always available.
         self.register_channel("local", self._local)
+
+        # OpenClaw handler: queues outbound messages in StateEngine for
+        # pickup by the daemon or an external sender process.
+        state = getattr(runtime, "state", None)
+        if state is not None:
+            self._openclaw = OpenClawHandler(state)
+            self.register_channel("openclaw", self._openclaw)
+        else:
+            self._openclaw = None
 
     # ------------------------------------------------------------------
     # Registration / routing

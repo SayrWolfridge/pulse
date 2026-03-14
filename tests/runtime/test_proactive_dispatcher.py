@@ -333,49 +333,50 @@ class TestDispatchOpenClawWakeMode(unittest.TestCase):
         self.candidate = _Candidate()
         self.proactive = _FakeProactive(candidate=self.candidate)
         self.response = _FakeResponse()
+        self.state = _FakeState()
         self.dispatcher = ProactiveDispatcher(
-            proactive=self.proactive, response=self.response
+            proactive=self.proactive, response=self.response, state=self.state
         )
 
-    def test_openclaw_wake_success(self):
-        mock_resp = MagicMock()
-        mock_resp.status = 202
-        mock_resp.read.return_value = b""
-
-        mock_conn = MagicMock()
-        mock_conn.getresponse.return_value = mock_resp
-
-        with patch("pulse.src.runtime.proactive_dispatcher.http.client.HTTPConnection") as MockConn:
-            MockConn.return_value = mock_conn
-            result = self.dispatcher.dispatch(mode=MODE_OPENCLAW_WAKE)
-
+    def test_openclaw_wake_writes_to_state(self):
+        result = self.dispatcher.dispatch(mode=MODE_OPENCLAW_WAKE)
         self.assertTrue(result.dispatched)
         self.assertIsNone(result.error)
+        queue = self.state.get("proactive.openclaw_outbound")
+        self.assertIsInstance(queue, list)
+        self.assertEqual(len(queue), 1)
+        entry = queue[0]
+        self.assertEqual(entry["kind"], self.candidate.kind)
+        self.assertEqual(entry["status"], "pending")
+        self.assertIn("queued_at", entry)
+        self.assertIn("text", entry)
 
-    def test_openclaw_wake_http_failure_records_error(self):
-        mock_resp = MagicMock()
-        mock_resp.status = 500
-        mock_resp.read.return_value = b""
+    def test_openclaw_wake_appends_to_existing_queue(self):
+        self.dispatcher.dispatch(mode=MODE_OPENCLAW_WAKE)
+        # Reset candidate so a second dispatch works
+        self.proactive._candidate = _Candidate(kind="goal_followup")
+        self.dispatcher.dispatch(mode=MODE_OPENCLAW_WAKE)
+        queue = self.state.get("proactive.openclaw_outbound")
+        self.assertEqual(len(queue), 2)
+        self.assertEqual(queue[0]["kind"], "morning_checkin")
+        self.assertEqual(queue[1]["kind"], "goal_followup")
 
-        mock_conn = MagicMock()
-        mock_conn.getresponse.return_value = mock_resp
-
-        with patch("pulse.src.runtime.proactive_dispatcher.http.client.HTTPConnection") as MockConn:
-            MockConn.return_value = mock_conn
-            result = self.dispatcher.dispatch(mode=MODE_OPENCLAW_WAKE)
-
-        self.assertTrue(result.dispatched)          # still "dispatched" — cooldown consumed
+    def test_openclaw_wake_no_state_returns_error(self):
+        d = ProactiveDispatcher(
+            proactive=self.proactive, response=self.response, state=None
+        )
+        result = d.dispatch(mode=MODE_OPENCLAW_WAKE)
+        self.assertTrue(result.dispatched)  # still dispatched — cooldown consumed
         self.assertIsNotNone(result.error)
-        self.assertIn("500", result.error)
+        self.assertIn("requires StateEngine", result.error)
 
-    def test_openclaw_wake_connection_error(self):
-        with patch("pulse.src.runtime.proactive_dispatcher.http.client.HTTPConnection") as MockConn:
-            MockConn.side_effect = ConnectionRefusedError("refused")
-            result = self.dispatcher.dispatch(mode=MODE_OPENCLAW_WAKE)
-
+    def test_openclaw_wake_does_not_post_to_feedback(self):
+        """Regression: openclaw_wake must NOT POST to /feedback endpoint."""
+        result = self.dispatcher.dispatch(mode=MODE_OPENCLAW_WAKE)
+        # If it tried HTTP, it would fail since there's no server — but we
+        # should succeed because we now write to state instead.
         self.assertTrue(result.dispatched)
-        self.assertIsNotNone(result.error)
-        self.assertIn("openclaw_wake delivery failed", result.error)
+        self.assertIsNone(result.error)
 
 
 class TestDispatchUnknownMode(unittest.TestCase):
