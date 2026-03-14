@@ -266,7 +266,7 @@ class NarrativeEngine:
         # 5. ContextEngine — relationship context (Josh)
         if self._context is not None:
             try:
-                josh = self._context.get_relationship_context("Josh")
+                josh = self._context.get_relationship("Josh")
                 if josh:
                     sources["relationship"] = {
                         "person": "Josh",

@@ -531,19 +531,32 @@ class RelationshipTier:
         Merge an event into a person's relationship file.
         Creates the file if it doesn't exist.
         """
+        touch = event.get("_touch", True) is not False
+
         data = self.get(person)
         if not data:
+            # Allow callers to seed first_seen/last_seen on first creation.
+            seeded_first = event.get("first_seen") or _now_iso()
+            seeded_last = event.get("last_seen") or _now_iso()
             data = {
                 "person": person,
-                "first_seen": _now_iso(),
-                "last_seen": _now_iso(),
+                "first_seen": seeded_first,
+                "last_seen": seeded_last,
                 "interaction_count": 0,
                 "bond_strength": 0.5,
                 "notes": [],
                 "recent_themes": [],
             }
-        data["last_seen"] = _now_iso()
-        data["interaction_count"] = data.get("interaction_count", 0) + 1
+
+        if touch:
+            data["last_seen"] = _now_iso()
+            data["interaction_count"] = data.get("interaction_count", 0) + 1
+        else:
+            # Non-touch update (e.g. decay sweep). Preserve last_seen + interaction_count.
+            if "last_seen" in event:
+                data["last_seen"] = event["last_seen"]
+            if "first_seen" in event and "first_seen" not in data:
+                data["first_seen"] = event["first_seen"]
         # Append note if provided
         note = event.get("note")
         if note:
@@ -552,9 +565,40 @@ class RelationshipTier:
             # Keep last 50 notes
             data["notes"] = notes[-50:]
         # Merge extra fields from event
+        # NOTE: Some fields are intentionally mutable (bond strength, themes, threads).
+        mutable_fields = {
+            "bond_strength",
+            "recent_themes",
+            "active_threads",
+            "current_context",
+            "what_he_needs_right_now",
+            "tier",
+            "kind",
+        }
         for k, v in event.items():
-            if k not in ("note", "ts", "ts_unix") and k not in data:
-                data[k] = v
+            if k in ("note", "ts", "ts_unix", "first_seen", "last_seen"):
+                continue
+            # Internal control keys (do not persist)
+            if k.startswith("_"):
+                continue
+            if k in mutable_fields:
+                # Special merge for recent_themes
+                if k == "recent_themes" and isinstance(v, list):
+                    existing = list(data.get("recent_themes") or [])
+                    for t in v:
+                        t = str(t).strip()
+                        if not t:
+                            continue
+                        if t in existing:
+                            existing.remove(t)
+                        existing.append(t)
+                    data["recent_themes"] = existing[-20:]
+                else:
+                    data[k] = v
+            else:
+                # Non-mutable fields: only set if missing (preserve history)
+                if k not in data:
+                    data[k] = v
         path = self._person_file(person)
         tmp = path.with_suffix(".tmp")
         with open(tmp, "w", encoding="utf-8") as f:
@@ -808,14 +852,18 @@ class ContextEngine:
     def update_relationship(self, person: str, event: dict) -> None:
         """Called after every meaningful interaction with a person."""
         self.relationship.update(person, event)
-        # Also log to hot tier
+
+        # Also log to hot tier (unless suppressed)
+        if event.get("_log", True) is False:
+            return
+
         self.log_event(
             {
                 "type": "RELATIONSHIP_UPDATE",
                 "content": f"Interaction with {person}",
                 "source": "context_engine",
                 "person": person,
-                **{k: v for k, v in event.items() if k != "note"},
+                **{k: v for k, v in event.items() if k != "note" and not str(k).startswith("_")},
             }
         )
 

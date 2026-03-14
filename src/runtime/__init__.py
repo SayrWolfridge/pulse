@@ -28,10 +28,11 @@ from .goal_engine import GoalEngine
 from .episodic_buffer import EpisodicBuffer
 from .narrative_engine import NarrativeEngine
 from .emotion_engine import EmotionEngine
+from .relationship_graph import RelationshipGraph
 
 logger = logging.getLogger("pulse.runtime")
 
-__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine"]
+__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine", "RelationshipGraph"]
 
 
 class HypostasRuntime:
@@ -75,6 +76,11 @@ class HypostasRuntime:
         self.goal_engine: GoalEngine = GoalEngine(self.state)
         self.episodic: EpisodicBuffer = EpisodicBuffer(self.state, path=self._state_dir / "episodes.jsonl")
         self.emotion: EmotionEngine = EmotionEngine(self.state, episodic=self.episodic)
+        self.relationships: RelationshipGraph = RelationshipGraph(
+            context=self.context,
+            state=self.state,
+            emotion=self.emotion,
+        )
         self.narrative: NarrativeEngine = NarrativeEngine(
             state=self.state,
             self_model=self.self_model,
@@ -242,6 +248,7 @@ class HypostasRuntime:
             "episodic": self.episodic.status(),
             "narrative": self.narrative.snapshot(),
             "emotion": self.emotion.status(),
+            "relationships": self.relationships.status() if hasattr(self.relationships, "status") else {"count": len(self.context.get_all_relationships() or {})},
         }
 
     # ------------------------------------------------------------------
@@ -283,6 +290,12 @@ class HypostasRuntime:
                     self._respond(200, body)
                 elif self.path == "/runtime/emotion/events":
                     body = json.dumps({"events": runtime.emotion.known_events()}).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/relationships":
+                    body = json.dumps(runtime.relationships.snapshot(top=20)).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/relationships/reconnect":
+                    body = json.dumps({"candidates": runtime.relationships.reconnect_candidates()}).encode()
                     self._respond(200, body)
                 else:
                     self._respond(404, b"Not found")
@@ -385,6 +398,22 @@ class HypostasRuntime:
                         self._respond(200, body)
                     except (ValueError, KeyError) as exc:
                         self._respond(400, json.dumps({"error": str(exc)}).encode())
+                    except Exception as exc:
+                        self._respond(500, json.dumps({"error": str(exc)}).encode())
+                elif self.path == "/runtime/relationships/event":
+                    try:
+                        length = int(self.headers.get("Content-Length", 0))
+                        raw = self.rfile.read(length)
+                        payload = json.loads(raw)
+                        rec = runtime.relationships.record_event(
+                            person=str(payload.get("person", "")),
+                            kind=str(payload.get("kind", "message")),
+                            note=str(payload.get("note", "")),
+                            themes=payload.get("themes"),
+                            delta_bond=payload.get("delta_bond"),
+                            tier=payload.get("tier"),
+                        )
+                        self._respond(200, json.dumps({"ok": True, "relationship": rec}).encode())
                     except Exception as exc:
                         self._respond(500, json.dumps({"error": str(exc)}).encode())
                 else:
