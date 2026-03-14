@@ -214,12 +214,14 @@ class ThoughtLoop:
         self,
         state: Any,         # StateEngine
         context: Any,       # ContextEngine
+        self_model: Optional[Any] = None,  # SelfModel (optional — falls back gracefully)
         ollama: Optional[OllamaClient] = None,
         idle_interval: int = IDLE_INTERVAL_SECONDS,
         active_interval: int = ACTIVE_INTERVAL_SECONDS,
     ):
         self.state = state
         self.context = context
+        self.self_model = self_model  # May be None for isolated / legacy usage
         self.ollama = ollama or OllamaClient()
         self.idle_interval = idle_interval
         self.active_interval = active_interval
@@ -302,6 +304,12 @@ class ThoughtLoop:
             self.state.add_insight(insight)
             result["reflect"] = insight
             self._insights_generated += 1
+            # Record insight into SelfModel — dream cycles update the prose description
+            if self.self_model is not None:
+                try:
+                    self.self_model.record_insight(insight, update_description=is_dream_time)
+                except Exception as _sm_exc:
+                    logger.debug("SelfModel.record_insight failed: %s", _sm_exc)
 
         # --- Plan (every PLAN_CYCLE_INTERVAL cycles) ---
         if self._cycle_count % PLAN_CYCLE_INTERVAL == 0:

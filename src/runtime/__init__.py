@@ -23,10 +23,11 @@ from .state_engine import StateEngine
 from .context_engine import ContextEngine
 from .thought_loop import ThoughtLoop
 from .bridge import RuntimeBridge
+from .self_model import SelfModel
 
 logger = logging.getLogger("pulse.runtime")
 
-__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge"]
+__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel"]
 
 
 class HypostasRuntime:
@@ -66,7 +67,8 @@ class HypostasRuntime:
         # Core components
         self.state: StateEngine = StateEngine(self._state_dir / "hypostas-state.json")
         self.context: ContextEngine = ContextEngine(self._state_dir)
-        self.thought_loop: ThoughtLoop = ThoughtLoop(self.state, self.context)
+        self.self_model: SelfModel = SelfModel(self.state)
+        self.thought_loop: ThoughtLoop = ThoughtLoop(self.state, self.context, self.self_model)
         self.bridge: RuntimeBridge = RuntimeBridge(self)  # passes self so bridge can access .state/.context/.thought_loop
 
         # Optional: existing PulseDaemon (wires EventBus hooks)
@@ -201,6 +203,7 @@ class HypostasRuntime:
             "state_dir": str(self._state_dir),
             "thought_loop": self.thought_loop.status(),
             "bridge": self.bridge.status(),
+            "self_model": self.self_model.status(),
         }
 
     # ------------------------------------------------------------------
