@@ -237,6 +237,10 @@ async def trigger_climax(triggered_by: str = "iris") -> dict:
     broadcast_arousal_to_constellation()
     logger.info(f"Climax triggered by {triggered_by} — broadcasting to constellation")
 
+    # Fire arousal cascade to Discord
+    from pulse.src.logos.arousal_cascade import schedule_cascade
+    schedule_cascade(intensity="peak", triggered_by=triggered_by)
+
     # Decay after 2 seconds
     await asyncio.sleep(2)
     arousal = set_arousal(0.3, "climax_afterglow", "building", triggered_by)

@@ -88,27 +88,37 @@ class TestCalendarSensor:
 
 
 class TestDiscordSensor:
-    @patch("pulse.src.runtime.sensors.http.client.HTTPConnection")
-    def test_active_sessions(self, mock_conn_cls):
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.read.return_value = b'[{"channel": "discord:general"}]'
-        mock_conn = MagicMock()
-        mock_conn.getresponse.return_value = mock_resp
-        mock_conn_cls.return_value = mock_conn
+    def test_active_sessions_from_sessions_file(self, tmp_path):
+        # Create a minimal OpenClaw-like sessions.json
+        sessions_file = tmp_path / "sessions.json"
+        now_ms = int(time.time() * 1000)
+        sessions_file.write_text(
+            '{\n'
+            '  "agent:main:discord:channel:123": {"updatedAt": %d},\n'
+            '  "agent:main:signal:direct:+1": {"updatedAt": %d}\n'
+            '}\n' % (now_ms, now_ms)
+        )
 
         sensor = DiscordSensor()
+        sensor.SESSIONS_FILE = sessions_file
         result = sensor.poll()
+
+        assert result["source"] == "sessions_file"
         assert result["event"] == "DISCORD_ACTIVE"
         assert result["active"] is True
+        assert result["active_discord_session_count"] == 1
 
     @patch("pulse.src.runtime.sensors.http.client.HTTPConnection")
-    def test_connection_error(self, mock_conn_cls):
-        mock_conn_cls.side_effect = ConnectionRefusedError("no gateway")
+    def test_connection_error_fallback_http(self, mock_conn_cls, tmp_path):
+        # Force sessions file to not exist, then ensure fallback handles errors.
         sensor = DiscordSensor()
+        sensor.SESSIONS_FILE = tmp_path / "missing.json"
+        mock_conn_cls.side_effect = ConnectionRefusedError("no gateway")
+
         result = sensor.poll()
         assert result["active"] is False
         assert result["event"] == "DISCORD_QUIET"
+        assert result["source"] == "http_legacy"
 
 
 class TestTwitterSensor:

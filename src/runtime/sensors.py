@@ -218,12 +218,61 @@ class CalendarSensor(BaseSensor):
 # ---------------------------------------------------------------------------
 
 class DiscordSensor(BaseSensor):
-    """Check if Discord bots are active via OpenClaw gateway."""
+    """Check if Discord bots are active.
+
+    NOTE:
+    - The original implementation polled `http://127.0.0.1:9720/api/sessions`.
+      Port 9720 is Pulse itself, so this produced noisy 404s in Pulse logs and
+      artificially inflated the `system` drive.
+
+    Preferred source of truth is OpenClaw's local sessions registry file.
+    """
 
     name = "discord"
     poll_interval_seconds = 300  # 5 minutes
 
+    # OpenClaw session registry (file-based, no network).
+    SESSIONS_FILE = Path("~/.openclaw/agents/main/sessions/sessions.json").expanduser()
+
+    # Treat a Discord session as "active" if updated recently.
+    ACTIVE_WINDOW_SECONDS = 15 * 60
+
     def poll(self) -> dict:
+        # 1) Preferred: file-based sessions registry.
+        try:
+            if self.SESSIONS_FILE.exists():
+                raw = self.SESSIONS_FILE.read_text(errors="ignore")
+                data = json.loads(raw) if raw.strip() else {}
+                if isinstance(data, dict):
+                    now_ms = time.time() * 1000
+                    active_keys = []
+                    all_discord_keys = []
+                    for k, v in data.items():
+                        if ":discord:" not in str(k):
+                            continue
+                        all_discord_keys.append(k)
+                        updated_at = 0
+                        if isinstance(v, dict):
+                            updated_at = int(v.get("updatedAt") or 0)
+                        if updated_at and (now_ms - updated_at) <= (self.ACTIVE_WINDOW_SECONDS * 1000):
+                            active_keys.append(k)
+
+                    active = len(active_keys) > 0
+                    return {
+                        "active": active,
+                        "event": "DISCORD_ACTIVE" if active else "DISCORD_QUIET",
+                        "source": "sessions_file",
+                        "session_count": len(data),
+                        "discord_session_count": len(all_discord_keys),
+                        "active_discord_session_count": len(active_keys),
+                        "timestamp": time.time(),
+                    }
+
+                # If file exists but isn't a dict, fall through to legacy.
+        except Exception as exc:
+            logger.debug("DiscordSensor: sessions file read failed (%s)", exc)
+
+        # 2) Legacy fallback: best-effort HTTP probe (kept for portability).
         try:
             conn = http.client.HTTPConnection("127.0.0.1", 9720, timeout=5)
             conn.request("GET", "/api/sessions")
@@ -234,20 +283,35 @@ class DiscordSensor(BaseSensor):
             if resp.status == 200:
                 data = json.loads(body)
                 sessions = data if isinstance(data, list) else data.get("sessions", [])
-                discord_sessions = [s for s in sessions if isinstance(s, dict) and "discord" in str(s.get("channel", "")).lower()]
+                discord_sessions = [
+                    s
+                    for s in sessions
+                    if isinstance(s, dict) and "discord" in str(s.get("channel", "")).lower()
+                ]
                 active = len(discord_sessions) > 0
                 return {
                     "active": active,
                     "event": "DISCORD_ACTIVE" if active else "DISCORD_QUIET",
+                    "source": "http_legacy",
                     "session_count": len(sessions),
                     "discord_session_count": len(discord_sessions),
                     "timestamp": time.time(),
                 }
-            else:
-                return {"active": False, "event": "DISCORD_QUIET", "error": f"HTTP {resp.status}"}
+
+            return {
+                "active": False,
+                "event": "DISCORD_QUIET",
+                "source": "http_legacy",
+                "error": f"HTTP {resp.status}",
+            }
         except Exception as exc:
             logger.debug("DiscordSensor error: %s", exc)
-            return {"active": False, "event": "DISCORD_QUIET", "error": str(exc)}
+            return {
+                "active": False,
+                "event": "DISCORD_QUIET",
+                "source": "http_legacy",
+                "error": str(exc),
+            }
 
 
 # ---------------------------------------------------------------------------

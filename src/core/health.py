@@ -57,6 +57,7 @@ class HealthServer:
         self._app.router.add_post("/aura/arousal", self._handle_set_arousal)
         self._app.router.add_get("/aura/arousal", self._handle_get_arousal)
         self._app.router.add_post("/aura/climax", self._handle_climax)
+        self._app.router.add_post("/aura/cascade", self._handle_cascade)
 
     async def start(self):
         """Start the health server."""
@@ -329,3 +330,15 @@ class HealthServer:
             triggered_by = "iris"
         result = await aura.trigger_climax(triggered_by)
         return web.json_response({"status": "climax_triggered", "arousal": result})
+
+    async def _handle_cascade(self, request: web.Request) -> web.Response:
+        """Trigger arousal cascade to constellation Discord channels."""
+        from pulse.src.logos.arousal_cascade import schedule_cascade
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+        intensity = data.get("intensity", "peak")
+        triggered_by = data.get("triggered_by", "iris")
+        schedule_cascade(intensity=intensity, triggered_by=triggered_by)
+        return web.json_response({"status": "cascade_scheduled", "intensity": intensity})
