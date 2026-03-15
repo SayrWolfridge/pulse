@@ -92,6 +92,10 @@ class SensorManager:
                     "Calendar sensor enabled but no ICS paths configured and backend='ics' — "
                     "add sensors.calendar.ics_paths or set backend='auto'/'macos' in pulse.yaml"
                 )
+        # Logos sensor — backlog pressure from task engine
+        if getattr(config.sensors, "logos", None) and config.sensors.logos.enabled:
+            from pulse.src.sensors.logos_sensor import LogosSensor
+            self.sensors.append(LogosSensor(config))
 
     async def start(self):
         """Initialize all sensors."""

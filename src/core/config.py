@@ -137,6 +137,18 @@ class CalendarSensorConfig:
 
 
 @dataclass
+@dataclass
+class LogosSensorConfig:
+    enabled: bool = True
+    agent: str = "iris"
+    db_path: str = "~/.pulse/logos.db"
+    backlog_pressure_per_task: float = 0.25
+    max_backlog_pressure: float = 3.0
+    stale_in_progress_minutes: int = 120
+    stale_pressure: float = 1.5
+
+
+@dataclass
 class SensorsConfig:
     filesystem: FilesystemSensorConfig = field(default_factory=FilesystemSensorConfig)
     discord: DiscordSensorConfig = field(default_factory=DiscordSensorConfig)
@@ -145,6 +157,7 @@ class SensorsConfig:
     web: WebSensorConfig = field(default_factory=WebSensorConfig)
     calendar: CalendarSensorConfig = field(default_factory=CalendarSensorConfig)
     system: SystemSensorConfig = field(default_factory=SystemSensorConfig)
+    logos: LogosSensorConfig = field(default_factory=LogosSensorConfig)
 
 
 @dataclass
@@ -518,6 +531,23 @@ class PulseConfig:
                     ),
                     watch_processes=sys_s.get(
                         "watch_processes", config.sensors.system.watch_processes
+                    ),
+                ),
+                logos=LogosSensorConfig(
+                    enabled=s.get("logos", {}).get("enabled", config.sensors.logos.enabled),
+                    agent=s.get("logos", {}).get("agent", config.sensors.logos.agent),
+                    db_path=s.get("logos", {}).get("db_path", config.sensors.logos.db_path),
+                    backlog_pressure_per_task=s.get("logos", {}).get(
+                        "backlog_pressure_per_task", config.sensors.logos.backlog_pressure_per_task
+                    ),
+                    max_backlog_pressure=s.get("logos", {}).get(
+                        "max_backlog_pressure", config.sensors.logos.max_backlog_pressure
+                    ),
+                    stale_in_progress_minutes=s.get("logos", {}).get(
+                        "stale_in_progress_minutes", config.sensors.logos.stale_in_progress_minutes
+                    ),
+                    stale_pressure=s.get("logos", {}).get(
+                        "stale_pressure", config.sensors.logos.stale_pressure
                     ),
                 ),
             )
