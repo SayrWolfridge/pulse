@@ -37,6 +37,32 @@ from .proactive_dispatcher import ProactiveDispatcher
 from .channel_bridge import ChannelBridge
 from .aura import AuraEngine
 
+# Biological modules (v1 → v2 integration)
+from .endocrine import Endocrine
+from .limbic import Limbic
+from .amygdala import Amygdala
+from .circadian import Circadian
+from .vagus import Vagus
+from .soma import Soma
+from .retina import Retina
+from .spine import Spine
+from .immune import Immune
+from .superego import Superego
+from .cerebellum import Cerebellum
+from .adipose import Adipose
+from .engram import Engram as EngramModule
+from .nephron import Nephron
+from .buffer_mod import Buffer
+from .dendrite import Dendrite
+from .mirror import Mirror
+from .phenotype import Phenotype
+from .telomere import Telomere
+from .thymus import Thymus
+from .vestibular import Vestibular
+from .enteric import Enteric
+from .callosum import Callosum
+from .plasticity import Plasticity
+
 logger = logging.getLogger("pulse.runtime")
 
 __all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine", "RelationshipGraph", "ContextAssembler", "ResponseEngine", "ProactiveEngine", "ProactiveDispatcher", "ChannelBridge", "AuraEngine"]
@@ -144,6 +170,32 @@ class HypostasRuntime:
             runtime=self,
         )
         self.bridge: RuntimeBridge = RuntimeBridge(self)  # passes self so bridge can access .state/.context/.thought_loop
+
+        # --- Biological modules (v1 → v2 integration) ---
+        self.endocrine: Endocrine = Endocrine(self.state)
+        self.limbic: Limbic = Limbic(self.state)
+        self.amygdala: Amygdala = Amygdala(self.state)
+        self.circadian: Circadian = Circadian(self.state)
+        self.vagus: Vagus = Vagus(self.state)
+        self.soma: Soma = Soma(self.state)
+        self.retina: Retina = Retina(self.state)
+        self.spine: Spine = Spine(self.state)
+        self.immune: Immune = Immune(self.state)
+        self.superego: Superego = Superego(self.state)
+        self.cerebellum: Cerebellum = Cerebellum(self.state)
+        self.adipose: Adipose = Adipose(self.state)
+        self.engram: EngramModule = EngramModule(self.state, self.episodic)
+        self.nephron: Nephron = Nephron(self.state, self.context)
+        self.buffer_mod: Buffer = Buffer(self.state)
+        self.dendrite: Dendrite = Dendrite(self.state, self.relationships)
+        self.mirror: Mirror = Mirror(self.state)
+        self.phenotype: Phenotype = Phenotype(self.state)
+        self.telomere: Telomere = Telomere(self.state, self.self_model)
+        self.thymus: Thymus = Thymus(self.state, self.self_model)
+        self.vestibular: Vestibular = Vestibular(self.state)
+        self.enteric: Enteric = Enteric(self.state)
+        self.callosum: Callosum = Callosum(self.state, self.emotion)
+        self.plasticity: Plasticity = Plasticity(self.state, self.goal_engine)
 
         # Optional: existing PulseDaemon (wires EventBus hooks)
         self._daemon = daemon
@@ -301,6 +353,31 @@ class HypostasRuntime:
             "dispatcher": self.dispatcher.status(),
             "channel_bridge": self.channel_bridge.status(),
             "aura": self.aura.snapshot(),
+            # Biological modules
+            "endocrine": self.endocrine.status(),
+            "limbic": self.limbic.status(),
+            "amygdala": self.amygdala.status(),
+            "circadian": self.circadian.status(),
+            "vagus": self.vagus.status(),
+            "soma": self.soma.status(),
+            "spine": self.spine.status(),
+            "retina": self.retina.status(),
+            "immune": self.immune.status(),
+            "superego": self.superego.status(),
+            "cerebellum": self.cerebellum.status(),
+            "adipose": self.adipose.status(),
+            "engram": self.engram.status(),
+            "nephron": self.nephron.status(),
+            "buffer": self.buffer_mod.status(),
+            "dendrite": self.dendrite.status(),
+            "mirror": self.mirror.status(),
+            "phenotype": self.phenotype.status(),
+            "telomere": self.telomere.status(),
+            "thymus": self.thymus.status(),
+            "vestibular": self.vestibular.status(),
+            "enteric": self.enteric.status(),
+            "callosum": self.callosum.status(),
+            "plasticity": self.plasticity.status(),
         }
 
     # ------------------------------------------------------------------
@@ -503,6 +580,31 @@ class HypostasRuntime:
                         self._respond(200, body)
                     except Exception as exc:
                         self._respond(500, json.dumps({"error": str(exc)}).encode())
+                # --- Biological module endpoints ---
+                elif self.path == "/runtime/endocrine":
+                    body = json.dumps(runtime.endocrine.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/limbic":
+                    body = json.dumps(runtime.limbic.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/circadian":
+                    body = json.dumps(runtime.circadian.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/soma":
+                    body = json.dumps(runtime.soma.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/spine/health":
+                    body = json.dumps(runtime.spine.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/amygdala":
+                    body = json.dumps(runtime.amygdala.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/vagus":
+                    body = json.dumps(runtime.vagus.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/enteric":
+                    body = json.dumps(runtime.enteric.status()).encode()
+                    self._respond(200, body)
                 else:
                     self._respond(404, b"Not found")
 
