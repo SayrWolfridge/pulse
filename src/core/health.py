@@ -42,6 +42,14 @@ class HealthServer:
         from pulse.src.metrics import PulseMetrics
         self.metrics = PulseMetrics(daemon)
 
+        # Logos backlog engine
+        from pulse.src.logos import LogosAPI, LogosStore
+        from pulse.src.logos.seed import seed
+        self._logos_store = LogosStore()
+        self._logos_api = LogosAPI(store=self._logos_store)
+        self._logos_api.register_routes(self._app)
+        seed(self._logos_store)
+
     async def start(self):
         """Start the health server."""
         self._runner = web.AppRunner(self._app)
