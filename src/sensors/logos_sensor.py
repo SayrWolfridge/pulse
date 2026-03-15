@@ -71,7 +71,7 @@ class LogosSensor(BaseSensor):
             self.db_path = DEFAULT_DB_PATH
         else:
             # Older installs used ~/.pulse/logos.db
-            self.db_path = LEGACY_DB_PATH
+            self.db_path = DEFAULT_DB_PATH
         self.pressure_per_task: float = cfg.backlog_pressure_per_task
         self.max_backlog_pressure: float = cfg.max_backlog_pressure
         self.stale_minutes: int = cfg.stale_in_progress_minutes

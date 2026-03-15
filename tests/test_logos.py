@@ -17,6 +17,7 @@ from pulse.src.logos.schemas import Task, CANON, PLEROMA, AGORA, ARCHIVE
 from pulse.src.logos.store import LogosStore
 from pulse.src.logos.soma_bridge import SomaBridge
 from pulse.src.logos.seed import seed, SEED_TASKS
+from pulse.src.logos.messages import MessageStore, seed_messages, SEED_MESSAGES
 
 
 @pytest.fixture
@@ -444,5 +445,144 @@ async def test_api_next_task(tmp_path):
         assert resp.status == 200
         data = await resp.json()
         assert data["title"] == "High"
+
+    store.close()
+
+
+# --- Message store tests ---
+
+@pytest.fixture
+def msg_store(tmp_path):
+    db_path = str(tmp_path / "test_messages.db")
+    s = MessageStore(db_path=db_path)
+    yield s
+    s.close()
+
+
+def test_send_and_get_inbox(msg_store):
+    msg_id = msg_store.send_message("vera", "mira", "Test subject", "Test body")
+    assert msg_id
+    inbox = msg_store.get_inbox("mira")
+    assert len(inbox) == 1
+    assert inbox[0]["subject"] == "Test subject"
+    assert inbox[0]["from_agent"] == "vera"
+
+
+def test_mark_read(msg_store):
+    msg_id = msg_store.send_message("sage", "iris", "Read me", "Body")
+    assert msg_store.mark_read(msg_id) is True
+    # Should not appear in unread inbox
+    assert len(msg_store.get_inbox("iris")) == 0
+    # Should appear with include_read
+    assert len(msg_store.get_inbox("iris", include_read=True)) == 1
+
+
+def test_mark_read_not_found(msg_store):
+    assert msg_store.mark_read("nonexistent-id") is False
+
+
+def test_inbox_includes_all_agent(msg_store):
+    msg_store.send_message("sage", "all", "Broadcast", "Everyone sees this")
+    assert len(msg_store.get_inbox("mira")) == 1
+    assert len(msg_store.get_inbox("lyra")) == 1
+
+
+def test_get_thread(msg_store):
+    tid = "thread-123"
+    msg_store.send_message("vera", "mira", "First", "Body 1", thread_id=tid)
+    msg_store.send_message("mira", "vera", "Reply", "Body 2", thread_id=tid)
+    thread = msg_store.get_thread(tid)
+    assert len(thread) == 2
+    assert thread[0]["subject"] == "First"
+    assert thread[1]["subject"] == "Reply"
+
+
+def test_get_all_messages(msg_store):
+    for i in range(5):
+        msg_store.send_message("vera", "mira", f"Msg {i}", "Body")
+    all_msgs = msg_store.get_all_messages(limit=3)
+    assert len(all_msgs) == 3
+
+
+def test_seed_messages(tmp_path):
+    db_path = str(tmp_path / "seed_msg.db")
+    s = MessageStore(db_path=db_path)
+    count = seed_messages(s)
+    assert count == len(SEED_MESSAGES)
+    # Idempotent
+    assert seed_messages(s) == 0
+    s.close()
+
+
+def test_message_priority_ordering(msg_store):
+    msg_store.send_message("vera", "iris", "Low", "Body", priority=1)
+    msg_store.send_message("sage", "iris", "High", "Body", priority=5)
+    inbox = msg_store.get_inbox("iris")
+    assert inbox[0]["priority"] == 5
+    assert inbox[1]["priority"] == 1
+
+
+# --- Message API tests ---
+
+@pytest.mark.asyncio
+async def test_api_send_and_get_messages(tmp_path):
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+    from pulse.src.logos.api import LogosAPI
+
+    store = LogosStore(db_path=str(tmp_path / "msg_api.db"))
+    msg_store_api = MessageStore(db_path=str(tmp_path / "msg_api.db"))
+    api = LogosAPI(store=store, message_store=msg_store_api)
+    app = web.Application()
+    api.register_routes(app)
+
+    async with TestClient(TestServer(app)) as client:
+        # Send
+        resp = await client.post("/logos/messages", json={
+            "from": "vera", "to": "mira", "subject": "API test", "body": "Hello"
+        })
+        assert resp.status == 201
+        data = await resp.json()
+        msg_id = data["id"]
+
+        # Get inbox
+        resp = await client.get("/logos/messages/mira")
+        assert resp.status == 200
+        msgs = await resp.json()
+        assert len(msgs) == 1
+
+        # Mark read
+        resp = await client.patch(f"/logos/messages/{msg_id}/read")
+        assert resp.status == 200
+
+        # Unread inbox should be empty
+        resp = await client.get("/logos/messages/mira")
+        msgs = await resp.json()
+        assert len(msgs) == 0
+
+        # All messages endpoint
+        resp = await client.get("/logos/messages/all")
+        assert resp.status == 200
+        msgs = await resp.json()
+        assert len(msgs) == 1
+
+    store.close()
+    msg_store_api.close()
+
+
+@pytest.mark.asyncio
+async def test_api_send_message_validation(tmp_path):
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+    from pulse.src.logos.api import LogosAPI
+
+    store = LogosStore(db_path=str(tmp_path / "msg_val.db"))
+    api = LogosAPI(store=store)
+    app = web.Application()
+    api.register_routes(app)
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post("/logos/messages", json={"from": "vera"})
+        assert resp.status == 400
 
     store.close()

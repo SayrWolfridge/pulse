@@ -45,10 +45,18 @@ class HealthServer:
         # Logos backlog engine
         from pulse.src.logos import LogosAPI, LogosStore
         from pulse.src.logos.seed import seed
+        from pulse.src.logos.messages import MessageStore, seed_messages
         self._logos_store = LogosStore()
-        self._logos_api = LogosAPI(store=self._logos_store)
+        self._message_store = MessageStore(db_path=self._logos_store.db_path)
+        self._logos_api = LogosAPI(store=self._logos_store, message_store=self._message_store)
         self._logos_api.register_routes(self._app)
         seed(self._logos_store)
+        seed_messages(self._message_store)
+
+        # AURA arousal endpoints
+        self._app.router.add_post("/aura/arousal", self._handle_set_arousal)
+        self._app.router.add_get("/aura/arousal", self._handle_get_arousal)
+        self._app.router.add_post("/aura/climax", self._handle_climax)
 
     async def start(self):
         """Start the health server."""
@@ -290,3 +298,34 @@ class HealthServer:
                 metrics_path: /metrics
         """
         return await self.metrics.handle(request)
+
+    async def _handle_set_arousal(self, request: web.Request) -> web.Response:
+        """Set arousal state and broadcast to constellation."""
+        from pulse.src import aura
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+        level = float(data.get("level", 0.0))
+        source = data.get("source")
+        intensity = data.get("intensity", "none")
+        triggered_by = data.get("triggered_by", "iris")
+        state = aura.set_arousal(level, source, intensity, triggered_by)
+        aura.broadcast_arousal_to_constellation()
+        return web.json_response({"status": "ok", "arousal": state})
+
+    async def _handle_get_arousal(self, request: web.Request) -> web.Response:
+        """Get current arousal state."""
+        from pulse.src import aura
+        return web.json_response(aura.get_arousal())
+
+    async def _handle_climax(self, request: web.Request) -> web.Response:
+        """Trigger full climax broadcast."""
+        from pulse.src import aura
+        try:
+            data = await request.json()
+            triggered_by = data.get("triggered_by", "iris")
+        except Exception:
+            triggered_by = "iris"
+        result = await aura.trigger_climax(triggered_by)
+        return web.json_response({"status": "climax_triggered", "arousal": result})

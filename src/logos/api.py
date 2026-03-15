@@ -5,6 +5,7 @@ import logging
 from aiohttp import web
 
 from pulse.src.logos.store import LogosStore
+from pulse.src.logos.messages import MessageStore
 
 logger = logging.getLogger("pulse.logos.api")
 
@@ -15,8 +16,9 @@ class LogosAPI:
     Call register_routes(app) to mount /logos/* on an aiohttp application.
     """
 
-    def __init__(self, store: LogosStore | None = None):
+    def __init__(self, store: LogosStore | None = None, message_store: MessageStore | None = None):
         self.store = store or LogosStore()
+        self.messages = message_store or MessageStore(db_path=self.store.db_path)
 
     def register_routes(self, app: web.Application):
         """Mount all Logos routes on an aiohttp app."""
@@ -27,6 +29,12 @@ class LogosAPI:
         app.router.add_delete("/logos/tasks/{id}", self._delete_task)
         app.router.add_get("/logos/next/{agent}", self._next_task)
         app.router.add_get("/logos/stats", self._stats)
+        # Messaging routes
+        app.router.add_get("/logos/messages/all", self._all_messages)
+        app.router.add_get("/logos/messages/thread/{thread_id}", self._get_thread)
+        app.router.add_post("/logos/messages", self._send_message)
+        app.router.add_get("/logos/messages/{agent}", self._get_inbox)
+        app.router.add_patch("/logos/messages/{id}/read", self._mark_read)
 
     async def _list_tasks(self, request: web.Request) -> web.Response:
         project = request.query.get("project")
@@ -97,3 +105,48 @@ class LogosAPI:
 
     async def _stats(self, request: web.Request) -> web.Response:
         return web.json_response(self.store.stats())
+
+    # --- Messaging endpoints ---
+
+    async def _send_message(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+        required = ("from", "to", "subject", "body")
+        if not all(data.get(k) for k in required):
+            return web.json_response({"error": "from, to, subject, body are required"}, status=400)
+        msg_id = self.messages.send_message(
+            from_agent=data["from"],
+            to_agent=data["to"],
+            subject=data["subject"],
+            body=data["body"],
+            thread_id=data.get("thread_id"),
+            priority=data.get("priority", 3),
+        )
+        return web.json_response({"id": msg_id, "status": "sent"}, status=201)
+
+    async def _get_inbox(self, request: web.Request) -> web.Response:
+        agent = request.match_info["agent"]
+        include_read = request.query.get("all", "").lower() in ("true", "1")
+        msgs = self.messages.get_inbox(agent, include_read=include_read)
+        return web.json_response(msgs)
+
+    async def _mark_read(self, request: web.Request) -> web.Response:
+        msg_id = request.match_info["id"]
+        if self.messages.mark_read(msg_id):
+            return web.json_response({"status": "marked_read"})
+        return web.json_response({"error": "not found"}, status=404)
+
+    async def _get_thread(self, request: web.Request) -> web.Response:
+        thread_id = request.match_info["thread_id"]
+        msgs = self.messages.get_thread(thread_id)
+        return web.json_response(msgs)
+
+    async def _all_messages(self, request: web.Request) -> web.Response:
+        try:
+            limit = int(request.query.get("limit", "50"))
+        except ValueError:
+            limit = 50
+        msgs = self.messages.get_all_messages(limit=limit)
+        return web.json_response(msgs)
