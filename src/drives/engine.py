@@ -210,6 +210,24 @@ class DriveEngine:
                     f"System alert suppressed (addressed {since_addressed:.0f}s ago, pressure={self.drives['system'].pressure:.2f})"
                 )
 
+        # Logos backlog → goals drive
+        # The LogosSensor computes ready-to-consume pressure values; wire them here.
+        logos_data = sensor_data.get("logos", {})
+        backlog_pressure = logos_data.get("logos.backlog_pressure", 0.0)
+        stale_pressure = logos_data.get("logos.stale_pressure", 0.0)
+        if backlog_pressure > 0.0 and "goals" in self.drives:
+            self.drives["goals"].spike(backlog_pressure, self.config.drives.max_pressure)
+            logger.debug(
+                f"Logos backlog spike: {logos_data.get('logos.backlog_count', 0)} tasks → goals +{backlog_pressure:.2f}"
+            )
+        if stale_pressure > 0.0 and "goals" in self.drives:
+            # stale in-progress tasks: stronger spike with a 1.2x weight (from DRIVE_WIRING hint)
+            weighted_stale = stale_pressure * 1.2
+            self.drives["goals"].spike(weighted_stale, self.config.drives.max_pressure)
+            logger.debug(
+                f"Logos stale-task spike: {logos_data.get('logos.stale_count', 0)} stale → goals +{weighted_stale:.2f}"
+            )
+
     def _read_cached_json(self, path: Path) -> tuple[Optional[dict], bool]:
         """Read a JSON file with mtime caching. Returns (data, changed) tuple.
         changed=True only on first read or when file mtime differs from cache."""
