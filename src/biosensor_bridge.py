@@ -175,38 +175,52 @@ def update_endocrine_from_biometrics(state: dict):
 
 
 def update_soma_from_biometrics(state: dict):
-    """Update SOMA energy/posture based on biometrics."""
-    soma_path = _DEFAULT_STATE_DIR / "soma-state.json"
-    if not soma_path.exists():
-        log.warning("SOMA state file not found — skipping")
-        return
+    """Legacy file-based SOMA update — kept for fallback only."""
+    pass  # Now handled by update_soma_runtime() which routes to HypostasRuntime
 
+
+def update_soma_runtime(state: dict):
+    """Update SOMA in HypostasRuntime via HTTP — single source of truth."""
     try:
-        soma = json.loads(soma_path.read_text())
-        changed = False
-
-        # Workout active → energy spend context
-        workout = state.get("workout", {})
-        if workout.get("active"):
-            soma["posture"] = "active"
-            changed = True
-
-        # Sleep → energy replenishment signal
+        # Build SOMA payload from biosensor state
+        hr = state.get("heart_rate", {})
+        hrv = state.get("hrv", {})
+        activity = state.get("activity", {})
         sleep = state.get("sleep", {})
-        if sleep.get("stage") == "deep":
-            # Deep sleep = high recovery signal for SOMA
-            current_energy = soma.get("energy", 0.8)
-            soma["energy"] = min(1.0, current_energy + 0.02)  # gentle recovery
-            changed = True
-            log.info(f"Deep sleep detected → SOMA energy +0.02")
+        workout = state.get("workout", {})
 
-        if changed:
-            soma["last_update"] = time.time()
-            soma_path.write_text(json.dumps(soma, indent=2))
-            log.info("SOMA state updated from biometrics")
+        # Determine posture from workout/activity
+        posture = "active" if workout.get("active") else "neutral"
+
+        # Determine energy delta from sleep/activity
+        energy_delta = 0.0
+        if sleep.get("stage") == "deep":
+            energy_delta = +0.05  # deep sleep = recovery
+            _post_runtime("/runtime/emotion/event", {"event": "DEEP_SLEEP", "note": "Deep sleep detected"})
+            log.info("Deep sleep → SOMA energy +0.05, DEEP_SLEEP emotion event")
+        elif workout.get("active"):
+            energy_delta = -0.02  # workout = energy spend
+
+        # POST to /runtime/soma/update (or use ingest as fallback)
+        soma_payload = {
+            "posture": posture,
+            "energy_delta": energy_delta,
+            "heart_rate": hr.get("value"),
+            "hr_zone": hr.get("zone"),
+            "hrv_ms": hrv.get("value"),
+            "stress_level": hrv.get("stress_level"),
+            "workout_active": workout.get("active", False),
+            "sleep_stage": sleep.get("stage"),
+            "move_calories": activity.get("move"),
+            "move_goal": activity.get("goal_move"),
+            "ts": time.time(),
+        }
+
+        _post_runtime("/runtime/soma/update", soma_payload)
+        log.info("SOMA runtime updated from biometrics")
 
     except Exception as e:
-        log.error(f"SOMA update failed: {e}")
+        log.error(f"SOMA runtime update failed: {e}")
 
 
 # ─── HTTP Handler ──────────────────────────────────────────────────────────────
@@ -304,6 +318,7 @@ class BiosensorHandler(BaseHTTPRequestHandler):
         _save_biosensor_state(state)
         update_endocrine_from_biometrics(state)
         update_soma_from_biometrics(state)
+        update_soma_runtime(state)
 
         self._respond(200, {"status": "ok", "path": path, "ts": time.time()})
 

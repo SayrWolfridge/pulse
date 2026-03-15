@@ -63,6 +63,12 @@ from .enteric import Enteric
 from .callosum import Callosum
 from .plasticity import Plasticity
 
+# Biological modules (v1 → v2 consolidation sprint 3)
+from .sensors import SensorManager
+from .instincts import InstinctExecutor, InstinctRegistry
+from .evolution import Evolution
+from .drive_engine import DriveEngine
+
 # Biological modules (v1 → v2 consolidation sprint 2)
 from .germinal import Germinal
 from .hypothalamus import Hypothalamus
@@ -77,7 +83,7 @@ from .proprioception import Proprioception
 
 logger = logging.getLogger("pulse.runtime")
 
-__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine", "RelationshipGraph", "ContextAssembler", "ResponseEngine", "ProactiveEngine", "ProactiveDispatcher", "ChannelBridge", "AuraEngine", "Germinal", "Hypothalamus", "Rem", "Thalamus", "Genome", "Chronicle", "CortexExt", "Myelin", "Oximeter", "Proprioception"]
+__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine", "RelationshipGraph", "ContextAssembler", "ResponseEngine", "ProactiveEngine", "ProactiveDispatcher", "ChannelBridge", "AuraEngine", "Germinal", "Hypothalamus", "Rem", "Thalamus", "Genome", "Chronicle", "CortexExt", "Myelin", "Oximeter", "Proprioception", "SensorManager", "InstinctExecutor", "InstinctRegistry", "Evolution", "DriveEngine"]
 
 
 class HypostasRuntime:
@@ -220,6 +226,13 @@ class HypostasRuntime:
         self.myelin: Myelin = Myelin(self.state, self.context)
         self.oximeter: Oximeter = Oximeter(self.state)
         self.proprioception: Proprioception = Proprioception(self.state, self.self_model)
+
+        # --- Biological modules (v1 → v2 consolidation sprint 3) ---
+        self.sensors: SensorManager = SensorManager(self.state, self.context)
+        self.instincts: InstinctRegistry = InstinctRegistry()
+        self.instinct_executor: InstinctExecutor = InstinctExecutor(self.state, self.instincts)
+        self.evolution: Evolution = Evolution(self.state)
+        self.drive_engine: DriveEngine = DriveEngine(self.state, self.goal_engine)
 
         # Optional: existing PulseDaemon (wires EventBus hooks)
         self._daemon = daemon
@@ -413,6 +426,12 @@ class HypostasRuntime:
             "myelin": self.myelin.status(),
             "oximeter": self.oximeter.status(),
             "proprioception": self.proprioception.status(),
+            # Sprint 3 biological modules
+            "sensors": self.sensors.status(),
+            "instincts": self.instincts.status(),
+            "instinct_executor": self.instinct_executor.status(),
+            "evolution": self.evolution.status(),
+            "drive_engine": self.drive_engine.status(),
         }
 
     # ------------------------------------------------------------------
@@ -677,6 +696,19 @@ class HypostasRuntime:
                 elif self.path == "/runtime/thalamus/recent":
                     body = json.dumps({"entries": runtime.thalamus.read_recent(20)}).encode()
                     self._respond(200, body)
+                # --- Sprint 3 endpoints ---
+                elif self.path == "/runtime/sensors":
+                    body = json.dumps(runtime.sensors.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/instincts":
+                    body = json.dumps(runtime.instincts.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/evolution":
+                    body = json.dumps(runtime.evolution.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/drives":
+                    body = json.dumps(runtime.drive_engine.status()).encode()
+                    self._respond(200, body)
                 else:
                     self._respond(404, b"Not found")
 
@@ -940,6 +972,31 @@ class HypostasRuntime:
                         ttl = float(payload.get("ttl_hours", 24.0))
                         event = runtime.aura.broadcast(kind, data, ttl)
                         self._respond(200, json.dumps(event).encode())
+                    except Exception as exc:
+                        self._respond(500, json.dumps({"error": str(exc)}).encode())
+                elif self.path == "/runtime/soma/update":
+                    try:
+                        length = int(self.headers.get("Content-Length", 0))
+                        raw = self.rfile.read(length)
+                        payload = json.loads(raw) if raw else {}
+                        # Apply energy delta
+                        delta = float(payload.get("energy_delta", 0.0))
+                        if delta > 0:
+                            runtime.soma.replenish(delta)
+                        elif delta < 0:
+                            runtime.soma.spend_energy(int(abs(delta) * 1000))
+                        # Apply posture
+                        posture = payload.get("posture")
+                        if posture:
+                            runtime.soma._state.set("soma.posture", posture)
+                        # Store full biosensor snapshot in soma state
+                        runtime.soma._state.set("soma.last_biosensor", payload)
+                        # If deep sleep, update CIRCADIAN context
+                        if payload.get("sleep_stage") == "deep":
+                            runtime.soma._state.set("soma.recovery_mode", True)
+                        else:
+                            runtime.soma._state.set("soma.recovery_mode", False)
+                        self._respond(200, json.dumps({"ok": True, "soma": runtime.soma.status()}).encode())
                     except Exception as exc:
                         self._respond(500, json.dumps({"error": str(exc)}).encode())
                 elif self.path == "/runtime/ingest":

@@ -364,6 +364,31 @@ class ThoughtLoop:
         if self._cycle_count % COMPRESS_CYCLE_INTERVAL == 0:
             self._age_to_cold()
 
+        # GERMINAL: check if any persistent unmet drives need a new module spawned
+        if self._runtime is not None and hasattr(self._runtime, 'germinal'):
+            try:
+                self._runtime.germinal.check_drives()
+            except Exception as exc:
+                logger.debug("GERMINAL check_drives error: %s", exc)
+
+        # CIRCADIAN: adjust cycle frequency based on time-of-day mode
+        if self._runtime is not None and hasattr(self._runtime, 'circadian'):
+            try:
+                mode = self._runtime.circadian.current_mode()
+                if mode == "DEEP_NIGHT":
+                    # Deep night: slower cycles (creative/dream mode)
+                    self.idle_interval = 600  # 10 min
+                elif mode == "DAWN":
+                    self.idle_interval = 360  # 6 min
+                elif mode in ("DAYLIGHT",):
+                    self.idle_interval = 300  # 5 min (default)
+                elif mode == "GOLDEN":
+                    self.idle_interval = 240  # 4 min (conversation-ready)
+                elif mode == "TWILIGHT":
+                    self.idle_interval = 300  # 5 min
+            except Exception as exc:
+                logger.debug("CIRCADIAN mode error: %s", exc)
+
         # AURA: poll constellation updates
         if self._runtime is not None and hasattr(self._runtime, 'aura'):
             try:
