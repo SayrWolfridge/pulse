@@ -63,9 +63,21 @@ from .enteric import Enteric
 from .callosum import Callosum
 from .plasticity import Plasticity
 
+# Biological modules (v1 → v2 consolidation sprint 2)
+from .germinal import Germinal
+from .hypothalamus import Hypothalamus
+from .rem import Rem
+from .thalamus import Thalamus
+from .genome import Genome
+from .chronicle import Chronicle
+from .cortex_ext import CortexExt
+from .myelin import Myelin
+from .oximeter import Oximeter
+from .proprioception import Proprioception
+
 logger = logging.getLogger("pulse.runtime")
 
-__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine", "RelationshipGraph", "ContextAssembler", "ResponseEngine", "ProactiveEngine", "ProactiveDispatcher", "ChannelBridge", "AuraEngine"]
+__all__ = ["HypostasRuntime", "StateEngine", "ContextEngine", "ThoughtLoop", "RuntimeBridge", "SelfModel", "GoalEngine", "EpisodicBuffer", "NarrativeEngine", "EmotionEngine", "RelationshipGraph", "ContextAssembler", "ResponseEngine", "ProactiveEngine", "ProactiveDispatcher", "ChannelBridge", "AuraEngine", "Germinal", "Hypothalamus", "Rem", "Thalamus", "Genome", "Chronicle", "CortexExt", "Myelin", "Oximeter", "Proprioception"]
 
 
 class HypostasRuntime:
@@ -196,6 +208,18 @@ class HypostasRuntime:
         self.enteric: Enteric = Enteric(self.state)
         self.callosum: Callosum = Callosum(self.state, self.emotion)
         self.plasticity: Plasticity = Plasticity(self.state, self.goal_engine)
+
+        # --- Biological modules (v1 → v2 consolidation sprint 2) ---
+        self.germinal: Germinal = Germinal(self.state, self.goal_engine)
+        self.hypothalamus: Hypothalamus = Hypothalamus(self.state, self.goal_engine)
+        self.rem: Rem = Rem(self.state, self.context, self.self_model)
+        self.thalamus: Thalamus = Thalamus(self.state)
+        self.genome: Genome = Genome(self.state, self.self_model)
+        self.chronicle: Chronicle = Chronicle(self.state, self.context)
+        self.cortex_ext: CortexExt = CortexExt(self.state)
+        self.myelin: Myelin = Myelin(self.state, self.context)
+        self.oximeter: Oximeter = Oximeter(self.state)
+        self.proprioception: Proprioception = Proprioception(self.state, self.self_model)
 
         # Optional: existing PulseDaemon (wires EventBus hooks)
         self._daemon = daemon
@@ -378,6 +402,17 @@ class HypostasRuntime:
             "enteric": self.enteric.status(),
             "callosum": self.callosum.status(),
             "plasticity": self.plasticity.status(),
+            # Sprint 2 biological modules
+            "germinal": self.germinal.status(),
+            "hypothalamus": self.hypothalamus.status(),
+            "rem": self.rem.status(),
+            "thalamus": self.thalamus.status(),
+            "genome": self.genome.status(),
+            "chronicle": self.chronicle.status(),
+            "cortex_ext": self.cortex_ext.status(),
+            "myelin": self.myelin.status(),
+            "oximeter": self.oximeter.status(),
+            "proprioception": self.proprioception.status(),
         }
 
     # ------------------------------------------------------------------
@@ -604,6 +639,43 @@ class HypostasRuntime:
                     self._respond(200, body)
                 elif self.path == "/runtime/enteric":
                     body = json.dumps(runtime.enteric.status()).encode()
+                    self._respond(200, body)
+                # --- Sprint 2 biological module endpoints ---
+                elif self.path == "/runtime/germinal":
+                    body = json.dumps(runtime.germinal.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/hypothalamus":
+                    body = json.dumps(runtime.hypothalamus.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/thalamus":
+                    body = json.dumps(runtime.thalamus.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/chronicle":
+                    body = json.dumps(runtime.chronicle.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/genome":
+                    body = json.dumps(runtime.genome.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/genome/export":
+                    body = json.dumps(runtime.genome.export_genome()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/rem":
+                    body = json.dumps(runtime.rem.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/cortex_ext":
+                    body = json.dumps(runtime.cortex_ext.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/myelin":
+                    body = json.dumps(runtime.myelin.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/oximeter":
+                    body = json.dumps(runtime.oximeter.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/proprioception":
+                    body = json.dumps(runtime.proprioception.status()).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/thalamus/recent":
+                    body = json.dumps({"entries": runtime.thalamus.read_recent(20)}).encode()
                     self._respond(200, body)
                 else:
                     self._respond(404, b"Not found")
