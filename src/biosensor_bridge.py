@@ -202,6 +202,8 @@ def update_soma_runtime(state: dict):
             energy_delta = -0.02  # workout = energy spend
 
         # POST to /runtime/soma/update (or use ingest as fallback)
+        body_data = state.get("body", {})
+        nutrition_data = state.get("nutrition", {})
         soma_payload = {
             "posture": posture,
             "energy_delta": energy_delta,
@@ -213,6 +215,15 @@ def update_soma_runtime(state: dict):
             "sleep_stage": sleep.get("stage"),
             "move_calories": activity.get("move"),
             "move_goal": activity.get("goal_move"),
+            "steps": activity.get("steps"),
+            "weight_lbs": body_data.get("weight_lbs"),
+            "body_fat_pct": body_data.get("body_fat_pct"),
+            "bmi": body_data.get("bmi"),
+            "vo2_max": body_data.get("vo2_max"),
+            "water_ml": nutrition_data.get("water_ml"),
+            "calories": nutrition_data.get("calories"),
+            "blood_oxygen": state.get("blood_oxygen", {}).get("value"),
+            "respiratory_rate": state.get("respiratory_rate", {}).get("value"),
             "ts": time.time(),
         }
 
@@ -310,6 +321,168 @@ class BiosensorHandler(BaseHTTPRequestHandler):
             elif wtype == "end":
                 state["workout"] = {"active": False, "activity": None, "started": None}
                 log.info("Workout ended")
+
+        elif path == "/biosensor/batch":
+            # Health Auto Export format: {"data": {"metrics": [{"name": "...", "units": "...", "data": [{"qty": ..., "date": ...}]}]}}
+            metrics_list = body.get("data", {}).get("metrics", [])
+
+            # Build a flat lookup: metric_name → latest qty value
+            def latest_qty(entries):
+                """Get the most recent qty from a list of {date, qty} entries."""
+                if not entries:
+                    return None
+                # Sort by date string descending, take last
+                try:
+                    sorted_entries = sorted(entries, key=lambda x: x.get("date", ""), reverse=True)
+                    return sorted_entries[0].get("qty")
+                except Exception:
+                    return entries[-1].get("qty") if entries else None
+
+            metrics = {}
+            for m in metrics_list:
+                name = m.get("name", "")
+                qty = latest_qty(m.get("data", []))
+                if qty is not None:
+                    metrics[name] = qty
+
+            log.info(f"[batch] parsed metrics: {list(metrics.keys())}")
+
+            # Heart rate
+            hr = metrics.get("heart_rate")
+            if hr:
+                zone = _hr_zone(float(hr))
+                state["heart_rate"] = {"value": float(hr), "ts": time.time(), "zone": zone}
+                log.info(f"[batch] Heart rate: {hr} bpm → zone={zone}")
+
+            # HRV
+            hrv = metrics.get("heart_rate_variability")
+            if hrv:
+                stress = _hrv_stress(float(hrv))
+                state["hrv"] = {"value": float(hrv), "ts": time.time(), "stress_level": stress}
+                log.info(f"[batch] HRV: {hrv} ms → stress={stress}")
+
+            # Resting heart rate
+            rhr = metrics.get("resting_heart_rate")
+            if rhr:
+                state["resting_heart_rate"] = {"value": float(rhr), "ts": time.time()}
+                log.info(f"[batch] Resting HR: {rhr} bpm")
+
+            # Active energy + steps
+            energy = metrics.get("active_energy")
+            steps = metrics.get("step_count") or metrics.get("steps")
+            stand = metrics.get("apple_stand_hour") or metrics.get("apple_stand_time")
+            if energy or steps:
+                state["activity"] = {
+                    "move": float(energy or 0),
+                    "steps": float(steps or 0),
+                    "stand": float(stand or 0),
+                    "exercise": float(metrics.get("apple_exercise_time", 0) or 0),
+                    "goal_move": 600,
+                    "ts": time.time(),
+                }
+                log.info(f"[batch] Activity: energy={energy}, steps={steps}, stand={stand}")
+
+            # Blood oxygen
+            spo2 = metrics.get("blood_oxygen_saturation")
+            if spo2:
+                state["blood_oxygen"] = {"value": float(spo2), "ts": time.time()}
+                log.info(f"[batch] SpO2: {spo2}%")
+
+            # Sleep
+            sleep_mins = metrics.get("sleep_analysis") or metrics.get("time_in_bed")
+            if sleep_mins:
+                state["sleep"] = {
+                    "stage": "unknown",
+                    "minutes": float(sleep_mins),
+                    "ts": time.time(),
+                }
+                log.info(f"[batch] Sleep: {sleep_mins} min")
+
+            # Weight / body mass
+            weight_kg = metrics.get("body_mass") or metrics.get("weight")
+            if weight_kg:
+                state["body"] = state.get("body", {})
+                state["body"]["weight_kg"] = float(weight_kg)
+                state["body"]["weight_lbs"] = round(float(weight_kg) * 2.20462, 1)
+                state["body"]["weight_ts"] = time.time()
+                log.info(f"[batch] Weight: {weight_kg} kg ({state['body']['weight_lbs']} lbs)")
+
+            # Body fat percentage
+            body_fat = metrics.get("body_fat_percentage")
+            if body_fat:
+                state["body"] = state.get("body", {})
+                state["body"]["body_fat_pct"] = float(body_fat)
+                state["body"]["body_fat_ts"] = time.time()
+                log.info(f"[batch] Body fat: {body_fat}%")
+
+            # BMI
+            bmi = metrics.get("body_mass_index")
+            if bmi:
+                state["body"] = state.get("body", {})
+                state["body"]["bmi"] = float(bmi)
+                log.info(f"[batch] BMI: {bmi}")
+
+            # Water intake
+            water = metrics.get("dietary_water")
+            if water:
+                state["nutrition"] = state.get("nutrition", {})
+                state["nutrition"]["water_ml"] = float(water)
+                state["nutrition"]["water_ts"] = time.time()
+                log.info(f"[batch] Water: {water} ml")
+
+            # Nutrition
+            calories = metrics.get("dietary_energy")
+            protein = metrics.get("dietary_protein")
+            carbs = metrics.get("dietary_carbohydrates")
+            fat = metrics.get("dietary_fat_total")
+            if any([calories, protein, carbs, fat]):
+                state["nutrition"] = state.get("nutrition", {})
+                if calories: state["nutrition"]["calories"] = float(calories)
+                if protein: state["nutrition"]["protein_g"] = float(protein)
+                if carbs: state["nutrition"]["carbs_g"] = float(carbs)
+                if fat: state["nutrition"]["fat_g"] = float(fat)
+                state["nutrition"]["nutrition_ts"] = time.time()
+                log.info(f"[batch] Nutrition: cal={calories}, protein={protein}g, carbs={carbs}g, fat={fat}g")
+
+            # Workouts
+            workout_data = None
+            for m in metrics_list:
+                if m.get("name") == "workouts":
+                    entries = m.get("data", [])
+                    if entries:
+                        latest = sorted(entries, key=lambda x: x.get("date",""), reverse=True)[0]
+                        workout_data = latest
+                    break
+            if workout_data:
+                state["workout"] = {
+                    "active": False,
+                    "activity": workout_data.get("workoutActivityType", "unknown"),
+                    "duration_min": workout_data.get("duration"),
+                    "calories": workout_data.get("totalEnergyBurned"),
+                    "avg_hr": workout_data.get("averageHeartRate"),
+                    "distance": workout_data.get("totalDistance"),
+                    "started": workout_data.get("date"),
+                }
+                log.info(f"[batch] Workout: {state['workout']['activity']}, {state['workout']['duration_min']} min, {state['workout']['calories']} cal")
+
+            # Mindful minutes
+            mindful = metrics.get("mindful_minutes") or metrics.get("mindfulness")
+            if mindful:
+                state["mindfulness"] = {"minutes": float(mindful), "ts": time.time()}
+                log.info(f"[batch] Mindful: {mindful} min")
+
+            # Respiratory rate
+            resp_rate = metrics.get("respiratory_rate")
+            if resp_rate:
+                state["respiratory_rate"] = {"value": float(resp_rate), "ts": time.time()}
+                log.info(f"[batch] Respiratory rate: {resp_rate} breaths/min")
+
+            # Vo2 max
+            vo2 = metrics.get("vo2_max") or metrics.get("cardio_fitness")
+            if vo2:
+                state["body"] = state.get("body", {})
+                state["body"]["vo2_max"] = float(vo2)
+                log.info(f"[batch] VO2 max: {vo2}")
 
         else:
             self._respond(404, {"error": f"unknown endpoint: {path}"})
