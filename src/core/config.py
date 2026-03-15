@@ -141,7 +141,8 @@ class CalendarSensorConfig:
 class LogosSensorConfig:
     enabled: bool = True
     agent: str = "iris"
-    db_path: str = "~/.pulse/logos.db"
+    # NOTE: LogosStore persists to ~/.pulse/logos/backlog.db (March 2026)
+    db_path: str = "~/.pulse/logos/backlog.db"
     backlog_pressure_per_task: float = 0.25
     max_backlog_pressure: float = 3.0
     stale_in_progress_minutes: int = 120

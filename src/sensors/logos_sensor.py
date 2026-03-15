@@ -63,7 +63,15 @@ class LogosSensor(BaseSensor):
         cfg = config.sensors.logos
 
         self.agent: str = cfg.agent
-        self.db_path: str = os.path.expanduser(cfg.db_path)
+        # Prefer configured path, but fall back to the canonical LogosStore path.
+        configured = os.path.expanduser(cfg.db_path)
+        if Path(configured).exists():
+            self.db_path = configured
+        elif Path(DEFAULT_DB_PATH).exists():
+            self.db_path = DEFAULT_DB_PATH
+        else:
+            # Older installs used ~/.pulse/logos.db
+            self.db_path = LEGACY_DB_PATH
         self.pressure_per_task: float = cfg.backlog_pressure_per_task
         self.max_backlog_pressure: float = cfg.max_backlog_pressure
         self.stale_minutes: int = cfg.stale_in_progress_minutes
