@@ -328,6 +328,43 @@ class ThoughtLoop:
         if is_dream_time:
             result["dream"] = True
 
+        # --- Sprint 3: Start-of-cycle ticks ---
+        if self._runtime is not None:
+            # Sensors tick
+            if hasattr(self._runtime, 'sensors'):
+                try:
+                    self._runtime.sensors.tick()
+                except Exception as exc:
+                    logger.debug("Sensors tick error: %s", exc)
+
+            # Instinct evaluation
+            if hasattr(self._runtime, 'instinct_executor'):
+                try:
+                    state_snapshot = self.state.snapshot()
+                    instinct_results = self._runtime.instinct_executor.evaluate(state_snapshot)
+                    if instinct_results:
+                        result["instincts_fired"] = [r["instinct"] for r in instinct_results]
+                        # Broadcast instinct firings via AURA
+                        if hasattr(self._runtime, 'aura'):
+                            for ir in instinct_results:
+                                if ir.get("aura_broadcast"):
+                                    try:
+                                        self._runtime.aura.broadcast(
+                                            ir["aura_broadcast"].get("kind", "instinct"),
+                                            ir["aura_broadcast"].get("payload", {}),
+                                        )
+                                    except Exception:
+                                        pass
+                except Exception as exc:
+                    logger.debug("Instinct evaluation error: %s", exc)
+
+            # DriveEngine tick
+            if hasattr(self._runtime, 'drive_engine'):
+                try:
+                    self._runtime.drive_engine.tick()
+                except Exception as exc:
+                    logger.debug("DriveEngine tick error: %s", exc)
+
         # --- Reflect (every cycle) ---
         insight = self._reflect(dream_mode=is_dream_time)
         if insight:
@@ -435,6 +472,13 @@ class ThoughtLoop:
                         result[behavior] = drive_result
         except Exception as exc:
             logger.debug("Non-productive drive resolution error: %s", exc)
+
+        # --- Sprint 3: End-of-cycle tick ---
+        if self._runtime is not None and hasattr(self._runtime, 'evolution'):
+            try:
+                self._runtime.evolution.tick()
+            except Exception as exc:
+                logger.debug("Evolution tick error: %s", exc)
 
         self._cycle_count += 1
         self._cycles_completed += 1
