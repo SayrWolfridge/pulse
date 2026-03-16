@@ -230,19 +230,33 @@ class DriveEngine:
 
     def _read_cached_json(self, path: Path) -> tuple[Optional[dict], bool]:
         """Read a JSON file with mtime caching. Returns (data, changed) tuple.
-        changed=True only on first read or when file mtime differs from cache."""
-        if not path.exists():
-            return None, False
+        changed=True only on first read or when file mtime differs from cache.
+
+        Non-existent files are also cached (sentinel mtime=-1) so we avoid
+        repeated os.stat() syscalls on every tick for files that never appear
+        (e.g. optional workspace files not present in a given agent setup).
+        """
+        _ABSENT = -1.0
+        key = str(path)
         try:
             mtime = path.stat().st_mtime
-            cached = self._source_cache.get(str(path))
-            if cached and cached[0] == mtime:
-                return cached[1], False  # same data, not changed
+        except FileNotFoundError:
+            # Cache the absence so we don't syscall again next tick
+            if self._source_cache.get(key, (None,))[0] != _ABSENT:
+                self._source_cache[key] = (_ABSENT, None)
+            return None, False
+        except OSError:
+            return None, False
+
+        cached = self._source_cache.get(key)
+        if cached and cached[0] == mtime:
+            return cached[1], False  # same data, not changed
+        try:
             data = json.loads(path.read_text())
-            self._source_cache[str(path)] = (mtime, data)
-            return data, True  # new or changed
         except Exception:
             return None, False
+        self._source_cache[key] = (mtime, data)
+        return data, True  # new or changed
 
     def _refresh_sources(self):
         """Read workspace files to update drive context.
