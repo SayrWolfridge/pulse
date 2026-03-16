@@ -99,6 +99,55 @@ def _hrv_stress(ms: float) -> str:
 RUNTIME_URL = "http://127.0.0.1:9723"
 
 
+def _qty(val) -> Optional[float]:
+    """Extract numeric qty from Health Auto Export value (dict or number)."""
+    if isinstance(val, dict):
+        return val.get("qty")
+    return val
+
+
+def _parse_hae_workout(workout_dict: dict) -> dict:
+    """Parse a single Health Auto Export v2 workout object into a Pulse workout state dict.
+
+    Handles both v1 (plain numeric fields) and v2 ({"qty": X, "units": "..."} wrapper)
+    field formats, plus multiple field-name aliases used across HAE versions.
+
+    Returns a workout state dict with keys: active, activity, duration_min, calories,
+    avg_hr, distance, started.
+    """
+    activity = (
+        workout_dict.get("name")
+        or workout_dict.get("workoutActivityType")
+        or workout_dict.get("activityType")
+        or workout_dict.get("type")
+        or "unknown"
+    )
+
+    # duration: prefer durationMin (minutes), then duration (may be seconds if > 1440)
+    dur = workout_dict.get("durationMin") or workout_dict.get("duration")
+    if dur is not None and dur > 1440:  # sanity: > 1440 min is almost certainly seconds
+        dur = round(dur / 60, 1)
+
+    cal_raw = (
+        _qty(workout_dict.get("activeEnergyBurned"))
+        or _qty(workout_dict.get("totalEnergyBurned"))
+        or _qty(workout_dict.get("calories"))
+    )
+    cal = round(float(cal_raw), 1) if cal_raw is not None else None
+
+    avg_hr = _qty(workout_dict.get("averageHeartRate")) or _qty(workout_dict.get("avgHeartRate"))
+
+    return {
+        "active": False,
+        "activity": activity,
+        "duration_min": dur,
+        "calories": cal,
+        "avg_hr": avg_hr,
+        "distance": workout_dict.get("totalDistance") or workout_dict.get("distance"),
+        "started": workout_dict.get("date") or workout_dict.get("startDate"),
+    }
+
+
 def _post_runtime(path: str, body: dict) -> bool:
     """POST to HypostasRuntime. Returns True on success."""
     import urllib.request
@@ -323,8 +372,20 @@ class BiosensorHandler(BaseHTTPRequestHandler):
                 log.info("Workout ended")
 
         elif path == "/biosensor/batch":
-            # Health Auto Export format: {"data": {"metrics": [{"name": "...", "units": "...", "data": [{"qty": ..., "date": ...}]}]}}
-            metrics_list = body.get("data", {}).get("metrics", [])
+            # Health Auto Export format: {"data": {"metrics": [...], "workouts": [...]}}
+            data_obj = body.get("data", {})
+            metrics_list = data_obj.get("metrics", [])
+
+            # Handle top-level workouts array (separate Health Auto Export automation)
+            top_level_workouts = data_obj.get("workouts", [])
+            if top_level_workouts:
+                try:
+                    latest_w = sorted(top_level_workouts, key=lambda x: x.get("date", ""), reverse=True)[0]
+                    log.info(f"[batch] Raw workout keys: {list(latest_w.keys())}")
+                    state["workout"] = _parse_hae_workout(latest_w)
+                    log.info(f"[batch] Workout (top-level): {state['workout']['activity']}, {state['workout']['duration_min']} min, {state['workout']['calories']} cal")
+                except Exception as e:
+                    log.warning(f"[batch] Failed to parse top-level workouts: {e}")
 
             # Build a flat lookup: metric_name → latest qty value
             def latest_qty(entries):

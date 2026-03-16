@@ -88,7 +88,7 @@ logger = logging.getLogger("pulse.runtime.proactive_dispatcher")
 # Proactive/ambient messages use a fast model so they don't block or timeout.
 # Real Josh conversations in ResponseEngine keep iris-70b-v4 for quality.
 PROACTIVE_MODEL = "qwen3.5:9b"
-PROACTIVE_TIMEOUT_S = 30  # 9B model generates in <5s typically; 30s is safe headroom
+PROACTIVE_TIMEOUT_S = 4  # Must return quickly (runtime endpoint has 5s callers/tests); fallback if Ollama is slow/down
 
 # ---------------------------------------------------------------------------
 # Delivery modes
