@@ -434,43 +434,60 @@ class BiosensorHandler(BaseHTTPRequestHandler):
                     total_asleep_min = 0.0
                     stage_minutes = {}
 
+                    # First pass: look for HAE daily summary entry (has totalSleep + stage keys in hours)
+                    summary = None
                     for e in entries:
-                        raw_stage = str(e.get("qty", "")).lower()
-                        stage = STAGE_MAP.get(raw_stage, "unknown")
+                        if "totalSleep" in e or ("core" in e and "deep" in e and "rem" in e):
+                            summary = e
+                            break
 
-                        # Duration: try explicit field first, then infer from startDate/endDate
-                        dur_sec = e.get("duration")  # seconds (some HAE versions)
-                        if dur_sec is None:
-                            val = e.get("value")
-                            if val is not None:
-                                dur_sec = float(val) * 60  # assume minutes → seconds
-                        if dur_sec is None:
-                            # HAE most commonly uses startDate/endDate strings
-                            start = e.get("startDate") or e.get("start_date") or e.get("startTime")
-                            end   = e.get("endDate")   or e.get("end_date")   or e.get("endTime")
-                            if start and end:
-                                try:
-                                    from datetime import datetime
-                                    FMT = "%Y-%m-%d %H:%M:%S %z"
-                                    t0 = datetime.strptime(start, FMT)
-                                    t1 = datetime.strptime(end,   FMT)
-                                    dur_sec = (t1 - t0).total_seconds()
-                                except Exception:
-                                    pass
-                        if dur_sec is None:
-                            continue  # can't compute duration for this entry
+                    if summary:
+                        # HAE summary: values are in hours, convert to minutes
+                        core_min  = float(summary.get("core",  0) or 0) * 60
+                        deep_min  = float(summary.get("deep",  0) or 0) * 60
+                        rem_min   = float(summary.get("rem",   0) or 0) * 60
+                        awake_min = float(summary.get("awake", 0) or 0) * 60
+                        total_min = float(summary.get("totalSleep", 0) or 0) * 60
+                        if total_min == 0:
+                            total_min = core_min + deep_min + rem_min
 
-                        dur_min = float(dur_sec) / 60.0
+                        total_asleep_min = total_min
+                        stage_minutes = {"core": core_min, "deep": deep_min, "rem": rem_min, "awake": awake_min}
+                        log.info(f"[batch] Sleep (summary): total={total_min:.0f}min core={core_min:.0f} deep={deep_min:.0f} rem={rem_min:.0f} awake={awake_min:.0f}")
+                    else:
+                        # Per-stage entries: qty=hours, value=stage name
+                        for e in entries:
+                            raw_stage = str(e.get("value", e.get("qty", ""))).lower()
+                            stage = STAGE_MAP.get(raw_stage, "unknown")
 
-                        if raw_stage in ASLEEP_STAGES:
-                            total_asleep_min += dur_min
-                        stage_minutes[stage] = stage_minutes.get(stage, 0) + dur_min
+                            # qty is duration in hours for per-stage entries
+                            qty_hr = None
+                            try:
+                                qty_hr = float(e.get("qty", 0) or 0)
+                            except (TypeError, ValueError):
+                                pass
 
-                    if total_asleep_min == 0 and stage_minutes:
-                        # All entries lack duration — just count entries as proxy (1 entry ≈ 1 min)
-                        # and note it as inaccurate
-                        total_asleep_min = sum(stage_minutes.values())
-                        log.warning("[batch] Sleep: no duration field found — using entry count as minute estimate")
+                            if qty_hr is None or qty_hr == 0:
+                                # Fall back to startDate/endDate
+                                start = e.get("startDate") or e.get("start_date")
+                                end   = e.get("endDate")   or e.get("end_date")
+                                if start and end:
+                                    try:
+                                        from datetime import datetime
+                                        FMT = "%Y-%m-%d %H:%M:%S %z"
+                                        t0 = datetime.strptime(start, FMT)
+                                        t1 = datetime.strptime(end,   FMT)
+                                        qty_hr = (t1 - t0).total_seconds() / 3600.0
+                                    except Exception:
+                                        pass
+
+                            if qty_hr is None:
+                                continue
+
+                            dur_min = qty_hr * 60.0
+                            if raw_stage in ASLEEP_STAGES or stage != "awake":
+                                total_asleep_min += dur_min
+                            stage_minutes[stage] = stage_minutes.get(stage, 0) + dur_min
 
                     dominant_stage = max(stage_minutes, key=stage_minutes.get) if stage_minutes else "unknown"
                     log.info(f"[batch] Sleep: {total_asleep_min:.1f} min asleep, dominant={dominant_stage}, breakdown={stage_minutes}")

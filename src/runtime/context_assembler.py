@@ -273,7 +273,13 @@ class ContextAssembler:
             except Exception as exc:
                 logger.debug("AURA constellation context failed: %s", exc)
 
-        # 8. Values (full only)
+        # 8. Biometric / SOMA state (standard + full)
+        if fmt in ("standard", "full"):
+            soma_text = self._get_soma_summary()
+            if soma_text:
+                sections.append(f"[SOMA] {soma_text}")
+
+        # 9. Values (full only)
         if fmt == "full":
             values_text = self._get_values_summary()
             if values_text:
@@ -405,6 +411,63 @@ class ContextAssembler:
             return " | ".join(parts)
         except Exception as exc:
             logger.debug("relationship context unavailable for %s: %s", person_key, exc)
+            return ""
+
+    def _get_soma_summary(self) -> str:
+        """Inject Josh's current biometric state from biosensor bridge."""
+        try:
+            bio = self._state.get("soma.last_biosensor")
+            if not bio:
+                return ""
+            parts = []
+
+            # Sleep
+            sleep_stage = bio.get("sleep_stage")
+            sleep_file = None
+            # Also try reading from biosensor-state.json directly
+            try:
+                import json as _json
+                from pathlib import Path as _Path
+                bsf = _Path.home() / ".pulse" / "state" / "biosensor-state.json"
+                if bsf.exists():
+                    bs = _json.loads(bsf.read_text())
+                    sl = bs.get("sleep", {})
+                    sleep_mins = sl.get("minutes", 0) or 0
+                    sleep_stage = sl.get("stage") or sleep_stage
+                    sleep_hrs = round(sleep_mins / 60, 1)
+                    if sleep_mins > 0:
+                        parts.append(f"Josh slept {sleep_hrs}h (dominant: {sleep_stage})")
+
+                    # HRV / stress
+                    hrv = bs.get("hrv", {})
+                    stress = hrv.get("stress_level")
+                    hrv_val = hrv.get("value")
+                    if hrv_val:
+                        parts.append(f"HRV {hrv_val:.0f}ms ({stress} stress)")
+
+                    # Resting HR
+                    rhr = bs.get("resting_heart_rate", {}).get("value")
+                    if rhr:
+                        parts.append(f"resting HR {rhr:.0f}bpm")
+
+                    # Activity
+                    act = bs.get("activity", {})
+                    steps = act.get("steps")
+                    if steps:
+                        parts.append(f"{int(steps)} steps today")
+
+                    # Workout
+                    wo = bs.get("workout", {})
+                    if wo.get("activity") and wo.get("duration_min"):
+                        parts.append(f"worked out: {wo['activity']} {wo['duration_min']:.0f}min")
+            except Exception:
+                pass
+
+            if not parts:
+                return ""
+            return " | ".join(parts)
+        except Exception as exc:
+            logger.debug("SOMA summary failed: %s", exc)
             return ""
 
     def _get_values_summary(self) -> str:
