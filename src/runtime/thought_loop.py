@@ -330,6 +330,13 @@ class ThoughtLoop:
 
         # --- Sprint 3: Start-of-cycle ticks ---
         if self._runtime is not None:
+            # Endocrine tick — apply hormonal decay based on elapsed time
+            if hasattr(self._runtime, 'endocrine'):
+                try:
+                    self._runtime.endocrine.tick()
+                except Exception as exc:
+                    logger.debug("Endocrine tick error: %s", exc)
+
             # Sensors tick
             if hasattr(self._runtime, 'sensors'):
                 try:
@@ -362,6 +369,21 @@ class ThoughtLoop:
             if hasattr(self._runtime, 'drive_engine'):
                 try:
                     self._runtime.drive_engine.tick()
+                    # Broadcast top drive to Thalamus
+                    if hasattr(self._runtime, 'thalamus'):
+                        try:
+                            drives = self._runtime.state.get("drives") or {}
+                            if drives:
+                                top = max(drives.items(), key=lambda x: float(x[1]) if isinstance(x[1], (int, float)) else 0, default=None)
+                                if top and float(top[1]) > 0.1:
+                                    self._runtime.thalamus.append({
+                                        "source": "drive_engine",
+                                        "type": "drive_tick",
+                                        "salience": min(float(top[1]) * 10, 5.0),
+                                        "data": {"top_drive": top[0], "pressure": round(float(top[1]), 3)},
+                                    })
+                        except Exception:
+                            pass
                 except Exception as exc:
                     logger.debug("DriveEngine tick error: %s", exc)
 
@@ -376,6 +398,17 @@ class ThoughtLoop:
             self.state.add_insight(insight)
             result["reflect"] = insight
             self._insights_generated += 1
+            # Broadcast insight to Thalamus bus
+            if self._runtime is not None and hasattr(self._runtime, 'thalamus'):
+                try:
+                    self._runtime.thalamus.append({
+                        "source": "thought_loop",
+                        "type": "insight",
+                        "salience": 6.0,
+                        "data": {"insight": insight[:500], "cycle": self._cycle_count, "dream": is_dream_time},
+                    })
+                except Exception as exc:
+                    logger.debug("Thalamus append (insight) error: %s", exc)
             # Record insight into SelfModel — dream cycles update the prose description
             if self.self_model is not None:
                 try:

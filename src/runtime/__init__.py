@@ -278,6 +278,18 @@ class HypostasRuntime:
         except Exception as e:
             logger.warning("EpisodicBuffer load failed (non-fatal): %s", e)
 
+        # 1d. Seed endocrine from persisted state if available
+        try:
+            self.endocrine._load_or_seed()
+        except Exception as e:
+            logger.warning("Endocrine seed failed (non-fatal): %s", e)
+
+        # 1e. Trigger RelationshipGraph decay sweep to prime in-memory state
+        try:
+            self.relationships.decay_sweep()
+        except Exception as e:
+            logger.warning("RelationshipGraph decay sweep failed (non-fatal): %s", e)
+
         # 2. Start StateEngine autosave thread
         self.state.start_autosave()
 
@@ -438,6 +450,45 @@ class HypostasRuntime:
     # Ingest (observe-only message processing)
     # ------------------------------------------------------------------
 
+    # Salience thresholds for episode gating
+    _BIOSENSOR_PREFIXES = ("[biosensor]", "[BIOSENSOR]", "biosensor")
+    _SYSTEM_PREFIXES = ("[system]", "[SYSTEM]", "session nearing compaction")
+    _ROUTINE_MAX_CHARS = 30  # Very short messages are probably routine
+
+    @staticmethod
+    def _message_salience(message: str, person: str, direction: str) -> float:
+        """Compute salience for an ingest message. Returns 0.0 to skip recording."""
+        msg_lower = message.lower().strip()
+
+        # Biosensor / system heartbeat messages — not episodically significant
+        biosensor_markers = ("[biosensor]", "biosensor", "hr zone=", "hrv stress=")
+        if any(msg_lower.startswith(m) or m in msg_lower[:60] for m in biosensor_markers):
+            return 0.0
+
+        # System/session compaction messages
+        system_markers = ("session nearing compaction", "[system]", "system:")
+        if any(msg_lower.startswith(m) for m in system_markers):
+            return 0.0
+
+        # Very short outbound messages (e.g., "okay", "yes", "done")
+        if direction == "sent" and len(message.strip()) < 20:
+            return 1.5
+
+        # Josh messages: scale by length / apparent substance
+        if person.lower() == "josh" and direction == "received":
+            if len(message) < 15:
+                return 3.0   # Very short Josh message (acknowledge, not significant)
+            if len(message) < 60:
+                return 4.0   # Short Josh message
+            return 5.5       # Substantive Josh message
+
+        # Generic received
+        if direction == "received":
+            return 3.5
+
+        # Sent messages (medium length)
+        return 3.0
+
     def ingest_message(
         self,
         message: str,
@@ -452,8 +503,9 @@ class HypostasRuntime:
           1. Log to hot tier (MESSAGE_RECEIVED or MESSAGE_SENT)
           2. Update relationship graph
           3. Trigger emotional processing
-          4. Record episodic trace
-          5. Return acknowledgment
+          4. Broadcast to Thalamus bus
+          5. Record episodic trace (gated by salience)
+          6. Return acknowledgment
         """
         now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -466,7 +518,7 @@ class HypostasRuntime:
             "channel": channel,
         })
 
-        # 2. Update relationship graph
+        # 2. Update relationship graph (always — keeps bond current)
         try:
             self.relationships.record_event(
                 person=person,
@@ -478,24 +530,45 @@ class HypostasRuntime:
 
         # 3. Emotional processing
         try:
-            if direction == "received" and person.lower() in ("josh",):
-                self.emotion.apply_event("JOSH_MESSAGE", note=message[:200])
-            elif direction == "received":
-                # Generic message event — just light joy + affection
-                self.emotion.update("joy", 0.05, reason=f"message from {person}")
+            msg_lower = message.lower().strip()
+            is_biosensor = any(m in msg_lower[:60] for m in ("biosensor", "hr zone=", "hrv stress="))
+            if not is_biosensor:
+                if direction == "received" and person.lower() in ("josh",):
+                    self.emotion.apply_event("JOSH_MESSAGE", note=message[:200])
+                elif direction == "received":
+                    self.emotion.update("joy", 0.05, reason=f"message from {person}")
         except Exception as e:
             logger.warning("Ingest: emotion update failed: %s", e)
 
-        # 4. Episodic trace
+        # 4. Thalamus broadcast
         try:
-            self.episodic.record(
-                kind="conversation",
-                title=f"{'Received' if direction == 'received' else 'Sent'} via {channel} — {person}",
-                content=message[:500],
-                salience=7.0 if person.lower() == "josh" else 5.0,
-                tags=["ingest", f"channel:{channel}", f"person:{person}"],
-                source="system",
-            )
+            salience = self._message_salience(message, person, direction)
+            self.thalamus.append({
+                "source": f"ingest:{channel}",
+                "type": event_type,
+                "salience": salience,
+                "data": {
+                    "person": person,
+                    "direction": direction,
+                    "channel": channel,
+                    "preview": message[:120],
+                },
+            })
+        except Exception as e:
+            logger.warning("Ingest: thalamus append failed: %s", e)
+
+        # 5. Episodic trace — gated by salience (skip routine/biosensor messages)
+        try:
+            salience = self._message_salience(message, person, direction)
+            if salience >= 3.5:
+                self.episodic.record(
+                    kind="conversation",
+                    title=f"{'Received' if direction == 'received' else 'Sent'} via {channel} — {person}",
+                    content=message[:500],
+                    salience=salience,
+                    tags=["ingest", f"channel:{channel}", f"person:{person}"],
+                    source="system",
+                )
         except Exception as e:
             logger.warning("Ingest: episodic record failed: %s", e)
 
@@ -708,6 +781,25 @@ class HypostasRuntime:
                     self._respond(200, body)
                 elif self.path == "/runtime/drives":
                     body = json.dumps(runtime.drive_engine.status()).encode()
+                    self._respond(200, body)
+                elif self.path.startswith("/runtime/cold-tier/search"):
+                    # Quick keyword search over cold-tier archives
+                    parsed = urlparse(self.path)
+                    params = parse_qs(parsed.query)
+                    query = (params.get("q") or params.get("query") or [""])[0]
+                    top_k = int((params.get("top_k") or ["10"])[0])
+                    results = runtime.context.cold.search(query, top_k=top_k)
+                    body = json.dumps({"query": query, "results": results}).encode()
+                    self._respond(200, body)
+                elif self.path == "/runtime/cold-tier/status":
+                    body = json.dumps({
+                        "total": runtime.context.cold.count(),
+                        "archives": [
+                            a.name for a in sorted(
+                                runtime.context.cold.index_dir.glob("archive-*.jsonl"), reverse=True
+                            )[:20]
+                        ],
+                    }).encode()
                     self._respond(200, body)
                 else:
                     self._respond(404, b"Not found")

@@ -40,6 +40,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -89,6 +90,10 @@ _KIND_SALIENCE: dict[str, float] = {
 
 # Where the buffer is persisted
 _DEFAULT_EPISODES_PATH = Path("~/.pulse/state/episodes.jsonl").expanduser()
+
+# Cold-tier archive for evicted episodes (when rolling window trims)
+_COLD_TIER_DIR = Path("~/.pulse/state/cold-tier").expanduser()
+_COLD_TIER_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _now_iso() -> str:
@@ -226,10 +231,23 @@ class EpisodicBuffer:
 
         with self._lock:
             self._episodes.append(ep)
-            # Trim rolling window
+
+            # Trim rolling window — archive evicted episodes to cold tier
+            evicted: list[dict[str, Any]] = []
             if len(self._episodes) > BUFFER_MAX:
+                evicted = self._episodes[:-BUFFER_MAX]
                 self._episodes = self._episodes[-BUFFER_MAX:]
+
+            # Persist the new episode
             self._append_to_disk(ep)
+
+            # Archive evicted episodes (best-effort; never blocks record())
+            if evicted:
+                try:
+                    self._archive_evicted(evicted)
+                except Exception:
+                    pass
+
             self._sync_state()
 
         logger.debug("Episode recorded: [%s] %s (salience=%.1f)", kind, title, salience)
@@ -366,3 +384,76 @@ class EpisodicBuffer:
             )
         except Exception as e:
             logger.debug("EpisodicBuffer: state sync skipped: %s", e)
+
+    def _archive_evicted(self, evicted: list[dict[str, Any]]) -> None:
+        """Archive evicted episodes to cold tier (JSONL) + refresh cold index.json.
+
+        This is the v2 cold-tier fallback when the rolling episodic buffer is full.
+        Uses only stdlib; never raises.
+        """
+        if not evicted:
+            return
+
+        # Timestamped archive file to avoid unbounded single-file growth
+        ts = time.time()
+        stamp = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
+        archive_path = _COLD_TIER_DIR / f"archive-episodes-{stamp}.jsonl"
+
+        try:
+            with archive_path.open("a", encoding="utf-8") as f:
+                for ep in evicted:
+                    title = str(ep.get("title", ""))
+                    content = str(ep.get("content", ""))
+                    record = {
+                        "type": "EPISODE_EVICTED",
+                        "ts": ep.get("ts"),
+                        "ts_unix": ts,
+                        "source": ep.get("source", "episodic_buffer"),
+                        "content": (title + " — " + content)[:500],
+                        "episode": {
+                            "id": ep.get("id"),
+                            "kind": ep.get("kind"),
+                            "title": title,
+                            "content": content[:2000],
+                            "salience": ep.get("salience"),
+                            "tags": ep.get("tags"),
+                            "linked_goal": ep.get("linked_goal"),
+                        },
+                    }
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except OSError:
+            return
+
+        # Refresh cold index.json (best-effort)
+        self._refresh_cold_index(additional_total=len(evicted))
+
+    def _refresh_cold_index(self, additional_total: int = 0) -> None:
+        """Update cold-tier index.json to include newly archived episodes."""
+        index_path = _COLD_TIER_DIR / "index.json"
+        try:
+            existing_total = 0
+            if index_path.exists():
+                try:
+                    existing = json.loads(index_path.read_text("utf-8"))
+                    existing_total = int(existing.get("total", 0))
+                except Exception:
+                    existing_total = 0
+
+            archives = sorted(_COLD_TIER_DIR.glob("archive-*.jsonl"))
+            catalog = []
+            for a in archives:
+                try:
+                    catalog.append({"file": a.name, "size_bytes": a.stat().st_size})
+                except OSError:
+                    continue
+
+            data = {
+                "total": int(existing_total) + int(additional_total),
+                "archives": catalog,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            tmp = index_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            os.replace(tmp, index_path)
+        except Exception:
+            return

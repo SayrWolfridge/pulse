@@ -34,6 +34,8 @@ from pulse.src.sensors.manager import BaseSensor
 logger = logging.getLogger("pulse.sensors.logos")
 
 DEFAULT_DB_PATH = os.path.expanduser("~/.pulse/logos.db")
+# Backwards-compat alias (older builds referenced LEGACY_DB_PATH)
+LEGACY_DB_PATH = DEFAULT_DB_PATH
 
 
 @dataclass
