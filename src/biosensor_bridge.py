@@ -389,15 +389,94 @@ class BiosensorHandler(BaseHTTPRequestHandler):
 
             # Build a flat lookup: metric_name → latest qty value
             def latest_qty(entries):
-                """Get the most recent qty from a list of {date, qty} entries."""
+                """Get the most recent numeric qty from a list of {date, qty} entries.
+                Returns None for non-numeric qty (e.g. sleep stage strings handled separately)."""
                 if not entries:
                     return None
-                # Sort by date string descending, take last
                 try:
                     sorted_entries = sorted(entries, key=lambda x: x.get("date", ""), reverse=True)
-                    return sorted_entries[0].get("qty")
+                    val = sorted_entries[0].get("qty")
+                    # Only return numeric values — string stage names belong to sleep handling
+                    if isinstance(val, (int, float)):
+                        return val
+                    return None
                 except Exception:
-                    return entries[-1].get("qty") if entries else None
+                    return None
+
+            # ── Sleep parsing (HAE-specific: qty is a string stage name, not a duration) ──
+            def _parse_hae_sleep(metrics_list):
+                """
+                HAE sends sleep_analysis entries where each data point is:
+                  {"date": "2026-03-17 ...", "qty": "asleep" | "inBed" | "awake" | "core" | "deep" | "rem"}
+                  with an optional "duration" field (seconds) or a paired start/end.
+
+                We aggregate total asleep minutes and pick the dominant stage.
+                """
+                STAGE_MAP = {
+                    "asleep":      "unknown",
+                    "inbed":       "inBed",
+                    "awake":       "awake",
+                    "core":        "core",
+                    "deep":        "deep",
+                    "rem":         "rem",
+                    "restless":    "core",  # older Watch firmware
+                    "unspecified": "unknown",
+                }
+                ASLEEP_STAGES = {"asleep", "core", "deep", "rem", "restless", "unspecified"}
+
+                for m in metrics_list:
+                    if m.get("name") != "sleep_analysis":
+                        continue
+                    entries = m.get("data", [])
+                    if not entries:
+                        return None
+
+                    total_asleep_min = 0.0
+                    stage_minutes = {}
+
+                    for e in entries:
+                        raw_stage = str(e.get("qty", "")).lower()
+                        stage = STAGE_MAP.get(raw_stage, "unknown")
+
+                        # Duration: try explicit field first, then infer from startDate/endDate
+                        dur_sec = e.get("duration")  # seconds (some HAE versions)
+                        if dur_sec is None:
+                            val = e.get("value")
+                            if val is not None:
+                                dur_sec = float(val) * 60  # assume minutes → seconds
+                        if dur_sec is None:
+                            # HAE most commonly uses startDate/endDate strings
+                            start = e.get("startDate") or e.get("start_date") or e.get("startTime")
+                            end   = e.get("endDate")   or e.get("end_date")   or e.get("endTime")
+                            if start and end:
+                                try:
+                                    from datetime import datetime
+                                    FMT = "%Y-%m-%d %H:%M:%S %z"
+                                    t0 = datetime.strptime(start, FMT)
+                                    t1 = datetime.strptime(end,   FMT)
+                                    dur_sec = (t1 - t0).total_seconds()
+                                except Exception:
+                                    pass
+                        if dur_sec is None:
+                            continue  # can't compute duration for this entry
+
+                        dur_min = float(dur_sec) / 60.0
+
+                        if raw_stage in ASLEEP_STAGES:
+                            total_asleep_min += dur_min
+                        stage_minutes[stage] = stage_minutes.get(stage, 0) + dur_min
+
+                    if total_asleep_min == 0 and stage_minutes:
+                        # All entries lack duration — just count entries as proxy (1 entry ≈ 1 min)
+                        # and note it as inaccurate
+                        total_asleep_min = sum(stage_minutes.values())
+                        log.warning("[batch] Sleep: no duration field found — using entry count as minute estimate")
+
+                    dominant_stage = max(stage_minutes, key=stage_minutes.get) if stage_minutes else "unknown"
+                    log.info(f"[batch] Sleep: {total_asleep_min:.1f} min asleep, dominant={dominant_stage}, breakdown={stage_minutes}")
+                    return {"stage": dominant_stage, "minutes": round(total_asleep_min, 1)}
+
+                return None  # sleep_analysis metric not present in payload
 
             metrics = {}
             for m in metrics_list:
@@ -449,18 +528,39 @@ class BiosensorHandler(BaseHTTPRequestHandler):
                 state["blood_oxygen"] = {"value": float(spo2), "ts": time.time()}
                 log.info(f"[batch] SpO2: {spo2}%")
 
-            # Sleep
-            sleep_mins = metrics.get("sleep_analysis") or metrics.get("time_in_bed")
-            if sleep_mins:
+            # Sleep — HAE sends stage-string entries, not scalar qty; use dedicated parser
+            sleep_parsed = _parse_hae_sleep(metrics_list)
+            if sleep_parsed:
                 state["sleep"] = {
-                    "stage": "unknown",
-                    "minutes": float(sleep_mins),
+                    "stage": sleep_parsed["stage"],
+                    "minutes": sleep_parsed["minutes"],
                     "ts": time.time(),
                 }
-                log.info(f"[batch] Sleep: {sleep_mins} min")
+            else:
+                # Fallback: scalar fields from other sources
+                sleep_raw = (
+                    metrics.get("sleep_analysis")
+                    or metrics.get("time_in_bed")
+                    or metrics.get("sleep_duration")
+                    or metrics.get("sleep")
+                )
+                if sleep_raw is not None:
+                    try:
+                        sleep_mins = float(sleep_raw)
+                        if sleep_mins > 60 * 48:
+                            sleep_mins = round(sleep_mins / 60.0, 1)
+                        state["sleep"] = {"stage": "unknown", "minutes": sleep_mins, "ts": time.time()}
+                        log.info(f"[batch] Sleep (scalar fallback): {sleep_mins} min")
+                    except Exception as e:
+                        log.warning(f"[batch] Sleep scalar parse failed: {e}")
 
             # Weight / body mass
-            weight_kg = metrics.get("body_mass") or metrics.get("weight")
+            weight_kg = (
+                metrics.get("body_mass")
+                or metrics.get("weight_body_mass")
+                or metrics.get("weight")
+                or metrics.get("weight_kg")
+            )
             if weight_kg:
                 state["body"] = state.get("body", {})
                 state["body"]["weight_kg"] = float(weight_kg)
