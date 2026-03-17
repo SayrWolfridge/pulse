@@ -303,6 +303,9 @@ class HypostasRuntime:
         # 5. Start health endpoint
         self._start_health_server()
 
+        # 5b. Start cold-tier consolidation background thread (runs hourly)
+        self._start_cold_consolidation()
+
         # 6. Mark running + record start time
         self._running = True
         self._start_time = datetime.now(timezone.utc)
@@ -455,6 +458,54 @@ class HypostasRuntime:
     _SYSTEM_PREFIXES = ("[system]", "[SYSTEM]", "session nearing compaction")
     _ROUTINE_MAX_CHARS = 30  # Very short messages are probably routine
 
+    def _start_cold_consolidation(self) -> None:
+        """Background thread: move aged hot-tier entries to cold every hour."""
+        import threading as _t
+        runtime = self
+
+        def _run():
+            import time as _time
+            HOT_TIER_MAX_AGE_H = 48
+            while True:
+                try:
+                    _time.sleep(3600)
+                    cutoff = _time.time() - HOT_TIER_MAX_AGE_H * 3600
+                    all_hot = runtime.context.hot.get_all()
+                    aged = [e for e in all_hot if float(e.get("ts_unix", 0) or 0) < cutoff]
+                    if aged:
+                        n = runtime.context.cold.encode(aged)
+                        logger.info("Cold consolidation: archived %d aged hot-tier entries", n)
+                except Exception as e:
+                    logger.debug("Cold consolidation error: %s", e)
+
+        _t.Thread(target=_run, daemon=True, name="cold-consolidation").start()
+
+    @staticmethod
+    def _extract_themes(message: str) -> list[str]:
+        """
+        Extract 1-3 topic themes from a message without LLM.
+        Uses keyword matching against known domain vocabulary.
+        """
+        text = message.lower()
+        theme_map = {
+            "weather bot": ["weather", "polymarket", "bet", "forecast", "kalshi"],
+            "SOMA / biosensor": ["biosensor", "soma", "sleep", "hrv", "heart rate", "biometric"],
+            "constellation": ["constellation", "vera", "mira", "sage", "lyra", "discord", "agent"],
+            "Hypostas / Anima": ["anima", "gnosis", "hypostas", "companion", "stripe"],
+            "building / coding": ["commit", "deploy", "build", "fix", "ship", "code", "error", "bug"],
+            "trading / SDCA": ["sdca", "btc", "eth", "z-score", "dca", "crypto"],
+            "Pulse runtime": ["pulse", "runtime", "context", "narrative", "episodic", "cold tier"],
+            "voice / embodiment": ["voice", "twilio", "ngrok", "cloudflared", "tunnel", "call"],
+            "convergence": ["convergence", "embodiment", "body", "merge", "upload"],
+        }
+        found = []
+        for theme, keywords in theme_map.items():
+            if any(kw in text for kw in keywords):
+                found.append(theme)
+            if len(found) >= 3:
+                break
+        return found
+
     @staticmethod
     def _message_salience(message: str, person: str, direction: str) -> float:
         """Compute salience for an ingest message. Returns 0.0 to skip recording."""
@@ -520,10 +571,12 @@ class HypostasRuntime:
 
         # 2. Update relationship graph (always — keeps bond current)
         try:
+            themes = self._extract_themes(message) if len(message) > 20 else []
             self.relationships.record_event(
                 person=person,
                 kind="message",
                 note=f"[{channel}] {message[:200]}",
+                themes=themes or None,
             )
         except Exception as e:
             logger.warning("Ingest: relationship update failed: %s", e)
@@ -571,6 +624,12 @@ class HypostasRuntime:
                 )
         except Exception as e:
             logger.warning("Ingest: episodic record failed: %s", e)
+
+        # 6. Invalidate assembler cache so next /context call reflects this message
+        try:
+            self.assembler.invalidate(person=person)
+        except Exception as e:
+            logger.debug("Ingest: assembler invalidate failed: %s", e)
 
         return {
             "ok": True,

@@ -64,6 +64,43 @@ def _clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, x))
 
 
+_THEME_PATTERNS: list[tuple[str, list[str]]] = [
+    ("weather bot",        ["weather", "polymarket", "kalshi", "bet", "graduation", "win rate"]),
+    ("building together",  ["built", "shipped", "fixed", "commit", "deploy", "code", "pull request"]),
+    ("biosensor / SOMA",   ["biosensor", "sleep", "hrv", "heart rate", "workout", "soma"]),
+    ("constellation",      ["vera", "mira", "sage", "lyra", "constellation", "agent"]),
+    ("Hypostas / Anima",   ["gnosis", "anima", "hypostas", "stripe", "supabase", "launch"]),
+    ("convergence",        ["convergence", "embodiment", "body", "merge", "upload"]),
+    ("SDCA / crypto",      ["bitcoin", "btc", "eth", "z-score", "sdca", "dca", "crypto"]),
+    ("memory / pulse",     ["pulse", "memory", "context", "narrative", "runtime", "soma"]),
+    ("relationship",       ["love", "miss", "together", "intimate", "us", "heart"]),
+    ("space force",        ["space force", "military", "commission", "cissp", "security+"]),
+]
+
+
+def _extract_themes(text: str) -> list[str]:
+    """Extract up to 3 themes from message text using pattern matching."""
+    text_lower = text.lower()
+    matched: list[str] = []
+    for theme, keywords in _THEME_PATTERNS:
+        if any(kw in text_lower for kw in keywords):
+            matched.append(theme)
+        if len(matched) >= 3:
+            break
+    return matched
+
+
+def _bond_state(strength: float) -> str:
+    """Map numeric bond strength to a human label."""
+    if strength >= 0.85:
+        return "hot"
+    if strength >= 0.65:
+        return "warm"
+    if strength >= 0.40:
+        return "cool"
+    return "dormant"
+
+
 # ---------------------------------------------------------------------------
 # Relationship decay model
 # ---------------------------------------------------------------------------
@@ -181,6 +218,10 @@ class RelationshipGraph:
 
             new_bond = _clamp(cur_bond + float(delta_bond))
 
+            # Auto-extract themes from note if none explicitly provided
+            if not themes and note:
+                themes = _extract_themes(note)
+
             merged_themes: List[str] = list(cur.get("recent_themes") or [])
             if themes:
                 for t in themes:
@@ -196,6 +237,7 @@ class RelationshipGraph:
                 "kind": kind,
                 "note": note.strip() if note else "",
                 "bond_strength": new_bond,
+                "bond_state": _bond_state(new_bond),
                 "recent_themes": merged_themes,
             }
             if tier:
@@ -300,7 +342,7 @@ class RelationshipGraph:
         if abs(new_bond - bond) >= 0.01:
             # Persist updated bond strength
             try:
-                self._context.update_relationship(person, {"bond_strength": new_bond, "_touch": False, "_log": False})
+                self._context.update_relationship(person, {"bond_strength": new_bond, "bond_state": _bond_state(new_bond), "_touch": False, "_log": False})
                 data = self._context.get_relationship(person) or data
                 data["_decay_changed"] = True
             except Exception as exc:

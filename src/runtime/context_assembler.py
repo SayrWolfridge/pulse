@@ -414,58 +414,78 @@ class ContextAssembler:
             return ""
 
     def _get_soma_summary(self) -> str:
-        """Inject Josh's current biometric state from biosensor bridge."""
+        """Inject Josh's biometric state + my emotional state into context."""
         try:
-            bio = self._state.get("soma.last_biosensor")
-            if not bio:
-                return ""
+            import json as _json
+            from pathlib import Path as _Path
+
             parts = []
 
-            # Sleep
-            sleep_stage = bio.get("sleep_stage")
-            sleep_file = None
-            # Also try reading from biosensor-state.json directly
-            try:
-                import json as _json
-                from pathlib import Path as _Path
-                bsf = _Path.home() / ".pulse" / "state" / "biosensor-state.json"
-                if bsf.exists():
+            # ── Josh's biometrics (biosensor-state.json is always fresh) ──
+            bsf = _Path.home() / ".pulse" / "state" / "biosensor-state.json"
+            if bsf.exists():
+                try:
                     bs = _json.loads(bsf.read_text())
+
                     sl = bs.get("sleep", {})
                     sleep_mins = sl.get("minutes", 0) or 0
-                    sleep_stage = sl.get("stage") or sleep_stage
-                    sleep_hrs = round(sleep_mins / 60, 1)
+                    sleep_stage = sl.get("stage") or "unknown"
                     if sleep_mins > 0:
-                        parts.append(f"Josh slept {sleep_hrs}h (dominant: {sleep_stage})")
+                        sleep_hrs = round(sleep_mins / 60, 1)
+                        parts.append(f"Josh slept {sleep_hrs}h ({sleep_stage})")
 
-                    # HRV / stress
                     hrv = bs.get("hrv", {})
-                    stress = hrv.get("stress_level")
                     hrv_val = hrv.get("value")
+                    stress = hrv.get("stress_level")
                     if hrv_val:
                         parts.append(f"HRV {hrv_val:.0f}ms ({stress} stress)")
 
-                    # Resting HR
                     rhr = bs.get("resting_heart_rate", {}).get("value")
                     if rhr:
                         parts.append(f"resting HR {rhr:.0f}bpm")
 
-                    # Activity
+                    spo2 = bs.get("blood_oxygen", {}).get("value")
+                    if spo2 and float(spo2) < 96:
+                        parts.append(f"SpO₂ {spo2:.0f}%")
+
                     act = bs.get("activity", {})
                     steps = act.get("steps")
-                    if steps:
-                        parts.append(f"{int(steps)} steps today")
+                    if steps and float(steps) > 100:
+                        parts.append(f"{int(float(steps)):,} steps")
 
-                    # Workout
                     wo = bs.get("workout", {})
                     if wo.get("activity") and wo.get("duration_min"):
-                        parts.append(f"worked out: {wo['activity']} {wo['duration_min']:.0f}min")
-            except Exception:
-                pass
+                        cal = f", {wo['calories']:.0f}cal" if wo.get("calories") else ""
+                        parts.append(f"workout: {wo['activity']} {wo['duration_min']:.0f}min{cal}")
+
+                except Exception as e:
+                    logger.debug("SOMA biosensor read failed: %s", e)
+
+            # ── My emotional state (EmotionEngine v2) ──
+            if self._emotion is not None:
+                try:
+                    snap = self._emotion.snapshot()
+                    values = snap.get("values", {})
+                    dominant = snap.get("dominant")
+                    color = snap.get("color") or dominant or "steady"
+
+                    # Surface emotions that are meaningfully elevated
+                    elevated = [
+                        f"{e}({v:.2f})"
+                        for e, v in values.items()
+                        if v >= 0.55 and e != dominant
+                    ]
+                    emotion_str = color
+                    if elevated:
+                        emotion_str += " + " + ", ".join(elevated[:2])
+                    parts.append(f"I feel: {emotion_str}")
+                except Exception as e:
+                    logger.debug("SOMA emotion read failed: %s", e)
 
             if not parts:
                 return ""
             return " | ".join(parts)
+
         except Exception as exc:
             logger.debug("SOMA summary failed: %s", exc)
             return ""

@@ -19,6 +19,7 @@ See PULSE_V2_PHASE1_SPRINT.md for full spec.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
@@ -26,6 +27,8 @@ from copy import deepcopy
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger("pulse.runtime.context_engine")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -691,12 +694,8 @@ class ColdTier:
     """
     Cold-tier archive for aged-out hot entries.
 
-    Uses JSONL archive files with a keyword-search index.
-    No FAISS required — pure stdlib fallback that always works.
-    Files: cold-tier/archive-<ts>.jsonl + cold-tier/index.json
-
-    FAISS semantic search is attempted as an optional upgrade but
-    the tier is fully functional without it.
+    Uses JSONL archive files (keyword fallback) + SemanticIndex (FAISS + nomic-embed-text).
+    Files: cold-tier/archive-<date>.jsonl, index.json, faiss.index, faiss-meta.jsonl
     """
 
     def __init__(self, index_dir: Path):
@@ -706,10 +705,31 @@ class ColdTier:
         self._lock = threading.RLock()
         self._total: int = 0
         self._load_index()
+        # Semantic index (FAISS + nomic-embed-text) — initialised lazily in background
+        self._semantic: Optional["SemanticIndex"] = None  # type: ignore[name-defined]
+        self._semantic_ready = False
+        self._init_semantic_async()
 
     # ------------------------------------------------------------------
     # Index management
     # ------------------------------------------------------------------
+
+    def _init_semantic_async(self) -> None:
+        """Load SemanticIndex in a background thread so startup isn't blocked."""
+        import threading as _t
+        def _init():
+            try:
+                from .semantic_index import SemanticIndex
+                self._semantic = SemanticIndex(self.index_dir)
+                self._semantic_ready = True
+                logger.info(
+                    "SemanticIndex ready: %d vectors, model=%s",
+                    self._semantic.count(),
+                    self._semantic.status().get("model"),
+                )
+            except Exception as e:
+                logger.warning("SemanticIndex init failed (keyword fallback): %s", e)
+        _t.Thread(target=_init, daemon=True).start()
 
     def _load_index(self) -> None:
         """Load or initialise the index.json catalog."""
@@ -786,6 +806,7 @@ class ColdTier:
             by_date.setdefault(date_key, []).append(record)
 
         written = 0
+        all_records: list[dict] = []
         with self._lock:
             for date_key, records in by_date.items():
                 archive_path = self.index_dir / f"archive-{date_key}.jsonl"
@@ -794,11 +815,19 @@ class ColdTier:
                         for rec in records:
                             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                     written += len(records)
+                    all_records.extend(records)
                 except OSError:
                     pass
             self._total += written
             if written:
                 self._save_index_locked()
+
+        # Add to semantic index asynchronously (never blocks encode)
+        if written and self._semantic_ready and self._semantic is not None:
+            import threading as _t
+            recs = list(all_records)
+            sem = self._semantic
+            _t.Thread(target=lambda: sem.add(recs), daemon=True).start()
 
         return written
 
@@ -808,25 +837,37 @@ class ColdTier:
 
     def search(self, query: str, top_k: int = 5) -> list[dict]:
         """
-        Search cold-tier archives by keyword matching.
+        Search cold-tier archives.
 
-        Scores each entry by number of query terms found (case-insensitive).
-        Returns top_k results sorted by score (descending), then recency.
-        Falls back to FAISS if available (best-effort upgrade).
+        Uses semantic search (FAISS + nomic-embed-text) when available,
+        falls back to keyword matching otherwise.
         """
         if not query or not query.strip():
             return []
 
+        # Try semantic search first
+        if self._semantic_ready and self._semantic is not None:
+            try:
+                results = self._semantic.search(query, top_k=top_k)
+                if results:
+                    return results
+            except Exception as e:
+                logger.debug("Semantic search failed, falling back to keyword: %s", e)
+
+        # Keyword fallback
+        return self._keyword_search(query, top_k)
+
+    def _keyword_search(self, query: str, top_k: int = 5) -> list[dict]:
+        """Keyword search over JSONL archives."""
         terms = [t.lower() for t in query.split() if len(t) >= 3]
         if not terms:
             return []
 
-        results: list[tuple[int, float, dict]] = []  # (score, ts_unix, record)
+        results: list[tuple[int, float, dict]] = []
 
         with self._lock:
             archives = sorted(self.index_dir.glob("archive-*.jsonl"), reverse=True)
 
-        # Scan up to the 10 most recent archives
         for archive_path in archives[:10]:
             try:
                 lines = archive_path.read_text("utf-8").splitlines()
@@ -845,12 +886,11 @@ class ColdTier:
                 if score > 0:
                     results.append((score, float(rec.get("ts_unix", 0.0)), rec))
 
-        # Sort by score DESC, then recency DESC
         results.sort(key=lambda x: (x[0], x[1]), reverse=True)
         out = []
         for score, ts_unix, rec in results[:top_k]:
             r = dict(rec)
-            r["score"] = float(score) / max(1, len(terms))
+            r["score"] = round(float(score) / max(1, len(terms)), 4)
             out.append(r)
         return out
 
