@@ -335,9 +335,15 @@ class ProactiveDispatcher:
         if self._state is None:
             return "openclaw_wake requires StateEngine but none is configured"
         try:
+            clean = (text or "").strip()
+            # Guardrail: never enqueue internal test strings
+            if clean.lower().startswith("test: outbound queue plumbing") or "outbound queue plumbing" in clean.lower():
+                logger.warning("Blocked enqueue of test outbound message")
+                return "blocked test outbound message"
+
             now = time.time()
             entry = {
-                "text": text,
+                "text": clean,
                 "kind": candidate.kind,
                 "priority": candidate.priority,
                 "person": "josh",
