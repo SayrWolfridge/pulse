@@ -544,14 +544,25 @@ class Parietal:
                 )
             )
 
-        # Tests directory — watch for output
+        # Tests — watch for recent *test activity*.
+        #
+        # Directory mtimes can be misleading (running tests often writes to
+        # `.pytest_cache/` and leaves `tests/` untouched). Prefer `.pytest_cache`
+        # when present so this signal reflects actual test runs.
         tests_dir = path / "tests"
-        if tests_dir.exists() and tests_dir.is_dir():
+        pytest_cache_dir = path / ".pytest_cache"
+        target_dir = (
+            pytest_cache_dir
+            if pytest_cache_dir.exists() and pytest_cache_dir.is_dir()
+            else tests_dir
+        )
+
+        if target_dir.exists() and target_dir.is_dir():
             signals.append(
                 HealthSignal(
                     id=f"{name}_tests",
                     type="file_age",
-                    target=str(tests_dir),
+                    target=str(target_dir),
                     healthy_if="age_hours < 168",
                     drive_impact="curiosity",
                     weight=0.3,
