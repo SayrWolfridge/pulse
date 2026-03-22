@@ -374,8 +374,14 @@ GLYMPH_MISSED_NEUROINFLAMMATION = 0.15     # Per missed flush
 # SECTION 11: INTEROCEPTION (INSULA)
 # =============================================================================
 
-# INSULA is qualitative — no numeric constants. Its quality is measured by
-# whether the prose output accurately reflects the numerical state.
+# INSULA is qualitative — prose output reflects numerical state.
+# But needs floor/ceiling for accuracy metric.
+INSULA_ACCURACY_MIN = 0.10                   # Floor — never fully blind to self
+INSULA_ACCURACY_MAX = 0.95                   # Ceiling — never perfectly certain
+
+# Allostatic load thresholds (used by HOMEO + INSULA + others)
+ALLOSTATIC_LOAD_HIGH_THRESHOLD = 0.70        # Orange — burnout preconditions
+ALLOSTATIC_LOAD_CRITICAL_THRESHOLD = 0.85    # Red — systemic failure risk
 
 
 # =============================================================================
