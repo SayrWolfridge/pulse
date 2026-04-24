@@ -21,6 +21,8 @@ class OpenClawConfig:
     session_mode: str = "isolated"
     # Delivery: announce results back to channel (only applies in isolated mode)
     deliver: bool = True
+    # Explicit sessionKey for main mode
+    session_key: Optional[str] = None
     # Model override for isolated sessions (None = use default)
     isolated_model: Optional[str] = None
 
@@ -334,6 +336,7 @@ class PulseConfig:
                 ),
                 session_mode=oc.get("session_mode", config.openclaw.session_mode),
                 deliver=oc.get("deliver", config.openclaw.deliver),
+                session_key=oc.get("session_key", config.openclaw.session_key),
                 isolated_model=oc.get("isolated_model", config.openclaw.isolated_model),
             )
 
