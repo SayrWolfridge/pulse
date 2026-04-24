@@ -918,6 +918,21 @@ class PulseDaemon:
         logger.info("Received shutdown signal — initiating shutdown")
         self.running = False
 
+    def _is_same_pulse_process(self, pid: int) -> bool:
+        """Return True only when PID belongs to a live Pulse daemon process."""
+        proc_cmdline = Path(f"/proc/{pid}/cmdline")
+        try:
+            raw = proc_cmdline.read_bytes()
+        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+            return False
+
+        cmdline = raw.replace(b"\0", b" ").decode("utf-8", errors="ignore")
+        if not cmdline.strip():
+            return False
+
+        lowered = cmdline.lower()
+        return "pulse" in lowered and "python" in lowered
+
     def _write_pid(self):
         """Write PID file with exclusive lock to prevent double-start."""
         pid_path = Path(self.config.daemon.pid_file).expanduser()
@@ -928,10 +943,15 @@ class PulseDaemon:
             try:
                 old_pid = int(pid_path.read_text().strip())
                 os.kill(old_pid, 0)  # signal 0 = check if alive
-                logger.error(
-                    f"Another Pulse instance is running (PID {old_pid}). Exiting."
+                if self._is_same_pulse_process(old_pid):
+                    logger.error(
+                        f"Another Pulse instance is running (PID {old_pid}). Exiting."
+                    )
+                    sys.exit(1)
+                logger.info(
+                    f"Removing stale PID file pointing to non-Pulse process (PID {old_pid})"
                 )
-                sys.exit(1)
+                pid_path.unlink(missing_ok=True)
             except (ValueError, ProcessLookupError, PermissionError):
                 logger.info("Removing stale PID file")
                 pid_path.unlink(missing_ok=True)
