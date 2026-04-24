@@ -204,6 +204,7 @@ class LoggingConfig:
 @dataclass
 class GenerativeConfig:
     enabled: bool = True
+    use_model: bool = False
     roadmap_files: List[str] = field(
         default_factory=lambda: ["TIERS.md", "ROADMAP.md", "TODO.md"]
     )
@@ -591,6 +592,7 @@ class PulseConfig:
             g = data["generative"]
             config.generative = GenerativeConfig(
                 enabled=g.get("enabled", config.generative.enabled),
+                use_model=g.get("use_model", config.generative.use_model),
                 roadmap_files=g.get("roadmap_files", config.generative.roadmap_files),
                 max_tasks=g.get("max_tasks", config.generative.max_tasks),
                 auto_add_to_goals=g.get(

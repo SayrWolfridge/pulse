@@ -32,8 +32,9 @@ class DefaultIntegration(Integration):
             parts.append(f"Suggested focus: {decision.sensor_context}")
 
         parts.append(
-            "Check if there's something worth doing. "
-            "If nothing needs attention, reply HEARTBEAT_OK."
+            "Check if there's something worth doing for this drive. "
+            "If сейчас не время, ресурса нет, or the drive-specific block says no visible action is needed — "
+            "say so briefly and do not invent work."
         )
 
         return "\n".join(parts)

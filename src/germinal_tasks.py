@@ -21,16 +21,63 @@ import aiohttp
 
 logger = logging.getLogger("pulse.germinal_tasks")
 
-# Default reflection task when LLM fails or is unavailable
-DEFAULT_REFLECTION_TASK = {
-    "title": "Reflect on current state and identify next moves",
-    "description": (
-        "Review current goals, recent memory, and drive pressures. "
-        "Identify one concrete action that can be completed right now "
-        "without any external dependencies. Write findings to working memory."
-    ),
-    "rationale": "Fallback task: LLM unavailable, but drives are high and nothing is actionable. Reflection keeps momentum.",
-    "drive": "growth",
+# Deterministic fallback tasks: boring computer work, not pseudo-reflection.
+FALLBACK_TASKS_BY_DRIVE = {
+    "workspace_git": {
+        "title": "Inspect workspace git changes",
+        "description": "List dirty workspace files and group them by likely concern. Do not commit or modify anything; produce a concise review target.",
+        "rationale": "Workspace git pressure is mechanical state. The useful fallback is inspection, not model-generated ideation.",
+        "drive": "workspace_git",
+        "effort": "low",
+        "requires_external": False,
+    },
+    "obsidian_git": {
+        "title": "Inspect Obsidian git changes",
+        "description": "List changed Obsidian notes and identify whether they look like daily notes, tasks, or content edits. Do not commit or modify anything.",
+        "rationale": "Obsidian git pressure should turn into a deterministic dirty-file review.",
+        "drive": "obsidian_git",
+        "effort": "low",
+        "requires_external": False,
+    },
+    "health": {
+        "title": "Run health diary preflight",
+        "description": "Run the health diary check script and report only concrete missing fields or no-op if the diary is clean.",
+        "rationale": "Health pressure is already script-readable; the fallback should use that script instead of asking a model to infer anything.",
+        "drive": "health",
+        "effort": "low",
+        "requires_external": False,
+    },
+    "emotions": {
+        "title": "Run emotions diary preflight",
+        "description": "Check emotions cooldown/completion/rotation state and either prepare one clean diary contract or no-op if nothing should be written.",
+        "rationale": "Emotions pressure should be handled by the diary preflight contract, not generic reflection.",
+        "drive": "emotions",
+        "effort": "low",
+        "requires_external": False,
+    },
+    "unfinished": {
+        "title": "List open hypotheses",
+        "description": "Read the open hypotheses state and list unresolved items with their checks. Do not invent new hypotheses.",
+        "rationale": "Unfinished pressure maps to existing open loops; deterministic listing is safer than synthesizing new work.",
+        "drive": "unfinished",
+        "effort": "low",
+        "requires_external": False,
+    },
+    "sayr_thoughts": {
+        "title": "Inspect Sayr thoughts queue",
+        "description": "Read the thoughts topics/state and identify whether a cooldown-safe diary note is actually due. If not due, no-op.",
+        "rationale": "Sayr-thoughts pressure is a queue/cooldown problem first, not an invitation to freewrite.",
+        "drive": "sayr_thoughts",
+        "effort": "low",
+        "requires_external": False,
+    },
+}
+
+DEFAULT_NOOP_TASK = {
+    "title": "No deterministic GENERATE action",
+    "description": "Do not synthesize new work. Keep current state and wait for a concrete sensor, user request, or drive-specific preflight.",
+    "rationale": "No drive-specific mechanical fallback matched. Silence is safer than inventing work.",
+    "drive": "none",
     "effort": "low",
     "requires_external": False,
 }
@@ -104,11 +151,28 @@ async def generate_tasks(context: dict, config: dict) -> List[dict]:
 
     max_tasks = config.get("max_tasks", 3)
 
-    # Build prompt from context
+    use_model = bool(config.get("use_model", False))
+    if not use_model:
+        tasks = _deterministic_fallback(context, max_tasks)
+        logger.info(
+            "GENERATE: model disabled, using deterministic fallback (%s)",
+            ", ".join(t.get("drive", "?") for t in tasks),
+        )
+        return tasks
+
+    # Build prompt from context only when a model call is explicitly enabled.
     user_prompt = _build_prompt(context, config)
 
     # Try LLM call
     model_config = config.get("model", {})
+    if not await _model_available(model_config):
+        tasks = _deterministic_fallback(context, max_tasks)
+        logger.info(
+            "GENERATE: configured model unavailable, using deterministic fallback (%s)",
+            ", ".join(t.get("drive", "?") for t in tasks),
+        )
+        return tasks
+
     try:
         raw_tasks = await _call_llm(user_prompt, model_config)
         tasks = _parse_and_filter(raw_tasks, context.get("goals", []), max_tasks)
@@ -117,10 +181,37 @@ async def generate_tasks(context: dict, config: dict) -> List[dict]:
             return tasks
         # LLM returned nothing usable
         logger.warning("GENERATE: LLM returned no actionable tasks, using fallback")
-        return [DEFAULT_REFLECTION_TASK]
+        return _deterministic_fallback(context, max_tasks)
     except Exception as e:
         logger.warning(f"GENERATE: LLM call failed ({e}), using fallback")
-        return [DEFAULT_REFLECTION_TASK]
+        return _deterministic_fallback(context, max_tasks)
+
+
+def _deterministic_fallback(context: dict, max_tasks: int) -> List[dict]:
+    """Map drive pressure to mechanical tasks without calling a model."""
+    drives = context.get("drives") or {}
+    ranked = sorted(
+        ((name, float(pressure)) for name, pressure in drives.items()),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+
+    tasks = []
+    seen = set()
+    for drive_name, pressure in ranked:
+        if pressure <= 0:
+            continue
+        task = FALLBACK_TASKS_BY_DRIVE.get(drive_name)
+        if not task or task["title"] in seen:
+            continue
+        tasks.append(dict(task))
+        seen.add(task["title"])
+        if len(tasks) >= max_tasks:
+            break
+
+    if tasks:
+        return tasks
+    return [dict(DEFAULT_NOOP_TASK)]
 
 
 def _build_prompt(context: dict, config: dict) -> str:
@@ -180,6 +271,37 @@ def _build_prompt(context: dict, config: dict) -> str:
                 pass
 
     return "\n".join(parts)
+
+
+async def _model_available(model_config: dict) -> bool:
+    """Return True only when the configured OpenAI-compatible model exists.
+
+    This prevents recurring empty GENERATE calls to missing local models.
+    If the endpoint does not support /models, fail closed: deterministic
+    fallback is cheaper and safer than hourly 404s/timeouts.
+    """
+    base_url = model_config.get("base_url", "http://127.0.0.1:11434/v1")
+    api_key = model_config.get("api_key", "ollama")
+    model = model_config.get("model", "llama3.2:3b")
+    url = f"{base_url}/models"
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=3),
+            ) as resp:
+                if resp.status != 200:
+                    return False
+                data = await resp.json()
+    except Exception:
+        return False
+
+    models = data.get("data", []) if isinstance(data, dict) else []
+    ids = {item.get("id") for item in models if isinstance(item, dict)}
+    return model in ids
 
 
 async def _call_llm(user_prompt: str, model_config: dict) -> list:

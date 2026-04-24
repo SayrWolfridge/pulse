@@ -442,6 +442,18 @@ class PulseDaemon:
 
     async def _trigger_turn(self, decision):
         """Trigger an OpenClaw agent turn via webhook."""
+        suppression = None
+        suppress_fn = getattr(self.integration, "suppress_trigger", None)
+        if suppress_fn:
+            try:
+                suppression = suppress_fn(decision, self.config)
+            except Exception as e:
+                logger.warning(f"Integration suppress_trigger failed: {e}")
+
+        if suppression:
+            self._handle_suppressed_trigger(decision, suppression)
+            return
+
         self.last_trigger_time = time.time()
         self.turn_count += 1
         self._turn_timestamps.append(self.last_trigger_time)
@@ -536,6 +548,47 @@ class PulseDaemon:
         # Feed outcome back to model evaluator for history context
         if self._model_evaluator and hasattr(self.evaluator, "record_trigger"):
             self.evaluator.record_trigger(decision, success)
+
+    def _handle_suppressed_trigger(self, decision, suppression: dict):
+        """Resolve a trigger mechanically without waking the agent/model."""
+        feedback = suppression.get("feedback") or {}
+        top_drive_name = decision.top_drive.name if decision.top_drive else None
+        drives_addressed = feedback.get("drives_addressed") or ([top_drive_name] if top_drive_name else [])
+        outcome = feedback.get("outcome", "success")
+        summary = feedback.get("summary") or suppression.get("reason") or "suppressed by integration preflight"
+        decay_overrides = feedback.get("decay_overrides", {})
+
+        now = time.time()
+        for drive_name in drives_addressed:
+            if drive_name not in self.drives.drives:
+                continue
+            drive = self.drives.drives[drive_name]
+            before = drive.pressure
+            if drive_name in decay_overrides:
+                decay_amount = float(decay_overrides[drive_name])
+            elif outcome == "success":
+                decay_amount = min(drive.pressure, drive.pressure * 0.85)
+            elif outcome == "partial":
+                decay_amount = min(drive.pressure, drive.pressure * 0.4)
+            else:
+                decay_amount = 0.0
+
+            drive.decay(decay_amount)
+            drive.last_addressed = now
+
+            if hasattr(self, "feedback_learner"):
+                self.feedback_learner.record(drive_name, before, outcome)
+                config_base = self.drive_engine.config_weight(drive_name)
+                drive.weight = self.feedback_learner.effective_weight(drive_name, config_base)
+
+        self.state.set("drives", self.drives.save_state())
+        self.state.save()
+
+        logger.info(
+            f"Trigger suppressed by integration: {outcome} — {drives_addressed} — {summary[:80]}"
+        )
+        if hasattr(self, "health") and hasattr(self.health, "metrics"):
+            self.health.metrics.record_feedback(outcome)
 
     def _on_trigger_daily_sync(self, decision, success, turn, **kwargs):
         """Event handler: log triggers to daily notes."""
@@ -680,6 +733,7 @@ class PulseDaemon:
             mc = self.config.evaluator.model
             gen_config = {
                 "enabled": self.config.generative.enabled,
+                "use_model": self.config.generative.use_model,
                 "roadmap_files": self.config.generative.roadmap_files,
                 "max_tasks": self.config.generative.max_tasks,
                 "workspace_root": self.config.workspace.root,

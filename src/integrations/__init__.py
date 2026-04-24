@@ -32,6 +32,16 @@ class Integration(ABC):
         """
         ...
 
+    def suppress_trigger(self, decision, config) -> Optional[dict]:
+        """Optionally suppress an already-positive trigger decision before webhook.
+
+        Integrations use this for deterministic preflight: if a drive can be
+        resolved mechanically or has no human-visible work, return a dict with
+        optional feedback payload instead of waking the agent/model.
+        Return None/False to continue with the normal webhook trigger.
+        """
+        return None
+
     def on_startup(self, daemon) -> None:
         """Called when daemon starts. Override to initialize integration-specific resources."""
         pass
