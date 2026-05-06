@@ -7,11 +7,14 @@ They feed raw signals into the drive engine.
 
 import asyncio
 import fnmatch
+import json
 import logging
 import os
 import re
+import subprocess
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -268,10 +271,15 @@ class ConversationSensor(BaseSensor):
     """
 
     name = "conversation"
+    LISA_STATE_WRITER = Path("/home/lisa/.openclaw/workspace/scripts/update-lisa-state.mjs")
+    LISA_STATE_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/lisa-state.json")
+    LISA_STATE_DECAY_INTERVAL_SECONDS = 30 * 60
 
     def __init__(self, config: PulseConfig):
         self.config = config
         self._last_human_activity: float = 0.0
+        self._last_lisa_state_signal_written: float = 0.0
+        self._last_lisa_state_decay: float = 0.0
 
     async def initialize(self):
         """Check for OpenClaw session directory."""
@@ -293,56 +301,177 @@ class ConversationSensor(BaseSensor):
                 return c
         return None
 
+    def _latest_session_file(self) -> Optional[Path]:
+        """Return the newest ordinary OpenClaw session file.
+
+        Trajectory files are runtime traces, not conversation transcripts. Topic
+        and direct sessions are both allowed; the actual human check happens by
+        parsing the file and verifying the sender.
+        """
+        candidates = [
+            Path("~/.openclaw/agents/main/sessions").expanduser(),
+            Path("~/.openclaw/workspace").expanduser(),
+        ]
+        newest: Optional[Path] = None
+        newest_mtime = 0.0
+        for session_dir in candidates:
+            if not session_dir.exists():
+                continue
+            try:
+                for path in session_dir.iterdir():
+                    if not path.is_file() or path.suffix != ".jsonl":
+                        continue
+                    if path.name.startswith("probe-") or path.name.endswith(".trajectory.jsonl"):
+                        continue
+                    try:
+                        mtime = path.stat().st_mtime
+                    except OSError:
+                        continue
+                    if mtime > newest_mtime:
+                        newest = path
+                        newest_mtime = mtime
+            except OSError:
+                continue
+        return newest
+
+    @staticmethod
+    def _parse_isoish_ts(value: str) -> Optional[float]:
+        try:
+            if value.endswith("Z"):
+                value = value[:-1] + "+00:00"
+            return datetime.fromisoformat(value).timestamp()
+        except Exception:
+            return None
+
+    def _latest_lisa_user_activity(self, path: Path) -> Optional[float]:
+        """Return timestamp of the latest user message from Lisa in a session.
+
+        This deliberately does not treat heartbeat/webhook/cron turns as human
+        activity: those either have no OpenClaw runtime-context sender metadata,
+        or their sender is not Lisa. Group sessions are fine when the sender is
+        Lisa herself.
+        """
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-80:]
+        except OSError:
+            return None
+
+        pending_user_ts: Optional[float] = None
+        latest_lisa_ts: Optional[float] = None
+
+        for line in lines:
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if item.get("type") == "message":
+                msg = item.get("message") or {}
+                if msg.get("role") == "user":
+                    ts = msg.get("timestamp")
+                    if isinstance(ts, (int, float)):
+                        pending_user_ts = float(ts) / 1000.0
+                    elif isinstance(item.get("timestamp"), str):
+                        pending_user_ts = self._parse_isoish_ts(item["timestamp"])
+                    else:
+                        pending_user_ts = None
+                else:
+                    pending_user_ts = None
+                continue
+
+            if item.get("type") != "custom_message":
+                continue
+            if item.get("customType") != "openclaw.runtime-context":
+                continue
+            if pending_user_ts is None:
+                continue
+
+            content = item.get("content") or ""
+            if '"sender_id": "312058326"' in content or '"sender_id":"312058326"' in content:
+                latest_lisa_ts = pending_user_ts
+            pending_user_ts = None
+
+        return latest_lisa_ts
+
+    @staticmethod
+    def _format_ts(timestamp: float) -> str:
+        return datetime.fromtimestamp(timestamp).astimezone().isoformat(timespec="seconds")
+
+    def _current_lisa_state_signal_ts(self) -> float:
+        try:
+            data = json.loads(self.LISA_STATE_PATH.read_text(encoding="utf-8"))
+            value = data.get("last_human_signal_at")
+            if isinstance(value, str):
+                return self._parse_isoish_ts(value) or 0.0
+        except Exception:
+            return 0.0
+        return 0.0
+
+    def _run_lisa_state_writer(self, *args: str) -> bool:
+        if not self.LISA_STATE_WRITER.exists():
+            return False
+        try:
+            subprocess.run(
+                ["node", str(self.LISA_STATE_WRITER), *args],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return True
+        except Exception as exc:
+            logger.debug("lisa-state writer skipped/failed: %s", exc)
+            return False
+
+    def _maybe_update_lisa_state_awake(self, lisa_activity: Optional[float]) -> None:
+        if not lisa_activity:
+            return
+        if lisa_activity <= self._last_lisa_state_signal_written + 0.001:
+            return
+        if lisa_activity <= self._current_lisa_state_signal_ts() + 0.001:
+            self._last_lisa_state_signal_written = lisa_activity
+            return
+
+        if self._run_lisa_state_writer(
+            "--awake-from-message",
+            "--signal-at",
+            self._format_ts(lisa_activity),
+            "--reason",
+            "ConversationSensor saw a fresh Lisa message; awake/not asleep at message time",
+        ):
+            self._last_lisa_state_signal_written = lisa_activity
+
+    def _maybe_decay_lisa_state_from_silence(self, *, now: float, in_cooldown: bool) -> None:
+        if in_cooldown:
+            return
+        if now - self._last_lisa_state_decay < self.LISA_STATE_DECAY_INTERVAL_SECONDS:
+            return
+
+        if self._run_lisa_state_writer(
+            "--decay-from-silence",
+            "--updated-at",
+            self._format_ts(now),
+        ):
+            self._last_lisa_state_decay = now
+
     async def read(self) -> dict:
         """Check for recent human conversation activity.
 
-        Strategy: Hit the OpenClaw webhook status endpoint to check
-        if a session is currently active with a human. Falls back to
-        checking session file mtimes.
+        Uses the newest ordinary session transcript, then verifies that the
+        latest user message in it is from Lisa. Heartbeats, cron, Pulse webhook
+        turns, assistant writes, and messages from other people do not update
+        human activity.
         """
         now = time.time()
         active = False
         last_activity = self._last_human_activity
 
-        # Strategy 1: Check the MAIN session transcript recency
-        # Only the main session represents human conversation.
-        # Cron, hook, and sub-agent sessions should NOT count as conversation.
-        # The main session transcript is the largest .jsonl file and is
-        # typically stored at the workspace root (symlinked from sessions/).
-        main_session_candidates = [
-            # OpenClaw workspace root — main session transcript lives here
-            Path("~/.openclaw/workspace").expanduser(),
-            Path("~/.openclaw/agents/main/sessions").expanduser(),
-        ]
-        try:
-            for session_dir in main_session_candidates:
-                if not session_dir.exists():
-                    continue
-                # Find the largest .jsonl file (main session is always biggest)
-                largest_file = None
-                largest_size = 0
-                for f in session_dir.iterdir():
-                    if (
-                        f.is_file()
-                        and f.suffix == ".jsonl"
-                        and not f.name.startswith("probe-")
-                    ):
-                        try:
-                            stat = f.stat()
-                            if stat.st_size > largest_size:
-                                largest_size = stat.st_size
-                                largest_file = f
-                        except OSError:
-                            continue
-                # Only check the main session (largest file, >100KB to filter out small hook sessions)
-                if largest_file and largest_size > 100_000:
-                    mtime = largest_file.stat().st_mtime
-                    if (now - mtime) < 120:  # 2 min window
-                        active = True
-                        self._last_human_activity = max(last_activity, mtime)
-                    break  # Only check one dir
-        except OSError:
-            pass
+        latest_file = self._latest_session_file()
+        lisa_activity = self._latest_lisa_user_activity(latest_file) if latest_file else None
+        if lisa_activity and (now - lisa_activity) < 120:  # 2 min window
+            active = True
+            self._last_human_activity = max(last_activity, lisa_activity)
+            self._maybe_update_lisa_state_awake(lisa_activity)
 
         cooldown_sec = self.config.evaluator.rules.conversation_cooldown_minutes * 60
         in_cooldown = (
@@ -350,6 +479,7 @@ class ConversationSensor(BaseSensor):
             if self._last_human_activity
             else False
         )
+        self._maybe_decay_lisa_state_from_silence(now=now, in_cooldown=in_cooldown)
 
         return {
             "active": active,
