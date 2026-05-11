@@ -395,6 +395,56 @@ def test_empty_unfinished_without_object_writes_no_action_trace(monkeypatch, tmp
     assert record["drive"] == "unfinished"
 
 
+def test_empty_unfinished_skips_observation_only_autonomous_tail(monkeypatch, tmp_path):
+    integration = _patch_unfinished_paths(monkeypatch, tmp_path, [])
+    integration.AUTONOMOUS_TASKS.write_text(
+        """
+# Autonomous tasks
+
+## Task 001 — goals focus-area extractor cleanup
+### Runs
+#### Run 2026-05-11 13:35
+- **Result**:
+  - задача по сути выполнена
+- **Open tail**:
+  - при следующем реальном goals-trigger посмотреть, не возвращается ли сырой task/system backlog в пользовательскую формулировку
+- **Question**:
+  - нет
+""".strip(),
+        encoding="utf-8",
+    )
+
+    verdict = integration._unfinished_preflight(record_trace=True)
+
+    assert verdict["action"] == "no_action"
+    assert "no existing bounded" in verdict["reason"]
+    record = json.loads(integration.UNFINISHED_NO_ACTION_TRACE.read_text(encoding="utf-8").strip())
+    assert record["drive"] == "unfinished"
+    assert record["discharge"] == "strong"
+
+
+def test_empty_unfinished_keeps_actionable_autonomous_tail(monkeypatch, tmp_path):
+    integration = _patch_unfinished_paths(monkeypatch, tmp_path, [])
+    integration.AUTONOMOUS_TASKS.write_text(
+        """
+# Autonomous tasks
+
+## Task 003 — unfinished empty-routing integration preflight
+### Runs
+#### Run 2026-05-04 09:50
+- **Open tail**:
+  - runtime still needs separately approved Pulse daemon restart/deploy before this affects live wakes
+""".strip(),
+        encoding="utf-8",
+    )
+
+    verdict = integration._unfinished_preflight(record_trace=True)
+
+    assert verdict["action"] == "route_to_task_crystallization"
+    assert "Task 003" in verdict["object"]["object"]
+    assert not integration.UNFINISHED_NO_ACTION_TRACE.exists()
+
+
 def test_empty_unfinished_routes_to_tail_triage_protocol(monkeypatch, tmp_path):
     integration = _patch_unfinished_paths(monkeypatch, tmp_path, [])
     integration.TAIL_TRIAGE_PROTOCOL.write_text("# Tail triage\n", encoding="utf-8")

@@ -783,6 +783,8 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         for section in text.split("\n## Task ")[1:]:
             header = section.splitlines()[0].strip()
             body_tail = section[-2500:].lower()
+            if self._autonomous_task_tail_is_observation_only(body_tail):
+                continue
             has_open_tail = "**open tail**" in body_tail and "\n- **open tail**:\n  - нет" not in body_tail
             looks_pending = any(marker in body_tail for marker in ("pending", "queued", "open tail", "future code step"))
             if header and (has_open_tail or looks_pending):
@@ -794,6 +796,58 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
                 }
 
         return None
+
+    @staticmethod
+    def _autonomous_task_tail_is_observation_only(body_tail: str) -> bool:
+        """Keep passive observation tails out of the unfinished wake path.
+
+        Autonomous tasks may leave an open tail that means "wait for a natural
+        runtime event, then inspect the result".  That is useful monitoring, but
+        it is not unfinished work and should not wake Sayr via empty-unfinished
+        fallback.  Actionable tails (code/deploy/restart/approval/etc.) still
+        remain candidates for unfinished routing.
+        """
+
+        if "**open tail**" not in body_tail:
+            return False
+
+        observation_markers = (
+            "observe",
+            "observation",
+            "watch one",
+            "wait for",
+            "дождаться",
+            "посмотреть",
+            "проверить живым",
+            "при следующем",
+            "после следующего",
+            "в рантайме",
+            "runtime trigger",
+            "goals-trigger",
+        )
+        actionable_markers = (
+            "future code step",
+            "implement",
+            "patch",
+            "fix",
+            "restart",
+            "deploy",
+            "approved",
+            "approval",
+            "согласовать",
+            "реcтарт",
+            "рестарт",
+            "деплой",
+            "правк",
+            "исправ",
+            "добавить",
+            "создать",
+            "запустить",
+        )
+
+        has_observation = any(marker in body_tail for marker in observation_markers)
+        has_action = any(marker in body_tail for marker in actionable_markers)
+        return has_observation and not has_action
 
     def _unfinished_curiosity_object(self) -> dict | None:
         if not self.CURIOSITY.exists():
