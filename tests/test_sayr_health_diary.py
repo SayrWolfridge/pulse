@@ -359,6 +359,8 @@ def test_empty_unfinished_without_object_requests_strong_discharge(monkeypatch, 
     assert verdict["discharge"] == "strong"
     record = json.loads(integration.UNFINISHED_NO_ACTION_TRACE.read_text(encoding="utf-8").strip())
     assert record["discharge"] == "strong"
+    assert record["pressure_relief"]["confirm_no_object"] is True
+    assert record["pressure_relief"]["stop_cleanly"] == "pressure relieved; no new action required"
 
 
 def test_empty_unfinished_routes_to_existing_curiosity_object(monkeypatch, tmp_path):
@@ -393,6 +395,27 @@ def test_empty_unfinished_without_object_writes_no_action_trace(monkeypatch, tmp
     assert record["action"] == "no_action"
     assert record["outcome"] == "not_actionable_now"
     assert record["drive"] == "unfinished"
+    assert record["pressure_relief"]["name_pressure"] == "residual unfinished pressure / empty signal"
+
+
+def test_empty_unfinished_no_action_contract_names_pressure_relief(monkeypatch, tmp_path):
+    integration = _patch_unfinished_paths(monkeypatch, tmp_path, [])
+
+    block = integration._build_unfinished_block()
+
+    assert "pressure_relief" in block
+    assert "name the residual pressure" in block
+    assert "pressure relieved" in block
+
+
+def test_empty_unfinished_suppression_summary_names_pressure_relief(monkeypatch, tmp_path):
+    integration = _patch_unfinished_paths(monkeypatch, tmp_path, [])
+    decision = SimpleNamespace(top_drive=SimpleNamespace(name="unfinished", pressure=0.46))
+
+    suppression = integration.suppress_trigger(decision, config=None)
+
+    assert suppression is not None
+    assert "pressure relieved" in suppression["feedback"]["summary"]
 
 
 def test_empty_unfinished_skips_observation_only_autonomous_tail(monkeypatch, tmp_path):

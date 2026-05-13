@@ -153,7 +153,7 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
             feedback = {
                 "drives_addressed": ["unfinished"],
                 "outcome": "success",
-                "summary": f"Empty unfinished suppressed agent wake: {verdict['reason']}",
+                "summary": f"Empty unfinished pressure relieved; suppressed agent wake: {verdict['reason']}",
             }
             if verdict.get("discharge") == "strong":
                 feedback["decay_overrides"] = {
@@ -916,6 +916,13 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
             "action": "no_action",
             "outcome": "not_actionable_now",
             "reason": reason,
+            "pressure_relief": {
+                "name_pressure": "residual unfinished pressure / empty signal",
+                "confirm_no_object": True,
+                "trace_sink": str(self.UNFINISHED_NO_ACTION_TRACE),
+                "de_escalate": "no task creation, no hypothesis closure, no experiment",
+                "stop_cleanly": "pressure relieved; no new action required",
+            },
         }
         if discharge:
             record["discharge"] = discharge
@@ -935,10 +942,10 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
                 "Bounded-action contract:",
                 "- object: none — no open hypotheses or fallback bounded objects were found",
                 "- pressure_reason: unfinished fired, but its source of truth is empty",
-                "- allowed_next_step: no_action / not_actionable_now; do not invent work",
+                "- allowed_next_step: pressure_relief / no_action / not_actionable_now; name the residual pressure, confirm no actionable object, write/update trace, then stop",
                 "- forbidden_without_lisa: do not search for new hypotheses, start experiments, change configs, restart services, or create tasks just because unfinished fired",
                 f"- result_sink: {self.UNFINISHED_NO_ACTION_TRACE}",
-                "- stop_condition: suppress the wake after writing the trace",
+                "- stop_condition: pressure relieved; suppress the wake after writing the trace",
             ])
 
         if verdict["action"].startswith("route_to_"):
