@@ -584,7 +584,7 @@ class PulseDaemon:
 
             if hasattr(self, "feedback_learner"):
                 self.feedback_learner.record(drive_name, before, outcome)
-                config_base = self.drive_engine.config_weight(drive_name)
+                config_base = self.drives.config_weight(drive_name)
                 drive.weight = self.feedback_learner.effective_weight(drive_name, config_base)
 
         self.state.set("drives", self.drives.save_state())
@@ -670,7 +670,7 @@ class PulseDaemon:
                     self.feedback_learner.record(
                         drive_name, drive.pressure, outcome
                     )
-                    config_base = self.drive_engine.config_weight(drive_name)
+                    config_base = self.drives.config_weight(drive_name)
                     drive.weight = self.feedback_learner.effective_weight(
                         drive_name, config_base
                     )
