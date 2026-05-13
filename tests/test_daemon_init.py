@@ -3,6 +3,8 @@
 import time
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 class TestLastTriggerTimeInit:
     """Verify last_trigger_time initializes to now, not epoch zero.
@@ -98,3 +100,28 @@ class TestLastTriggerTimeInit:
             "this suggests last_trigger_time was initialized to epoch (0.0) instead of time.time(). "
             "A 56-year idle is a misleading artifact, not a real measurement."
         )
+
+
+class TestShutdownWake:
+    """Verify SIGTERM handler wakes the async loop instead of waiting full interval."""
+
+    @pytest.mark.asyncio
+    async def test_handle_shutdown_sets_event(self):
+        from pulse.src.core.daemon import PulseDaemon
+
+        daemon = PulseDaemon.__new__(PulseDaemon)
+        daemon.running = True
+        daemon._shutdown_event = None
+
+        daemon._handle_shutdown()
+
+        assert daemon.running is False
+
+        event = __import__("asyncio").Event()
+        daemon.running = True
+        daemon._shutdown_event = event
+
+        daemon._handle_shutdown()
+
+        assert daemon.running is False
+        assert event.is_set()

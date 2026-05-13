@@ -91,6 +91,7 @@ class PulseDaemon:
         self._turn_timestamps: list = []  # sliding window for rate limiting
         self._pid_fd = None  # file descriptor for PID lock
         self._last_generate_time: float = 0.0  # track GENERATE step timing
+        self._shutdown_event: asyncio.Event | None = None
         self.runtime_bridge = None  # set by HypostasRuntime.start() if Phase 1 is active
 
         # Core components
@@ -189,6 +190,7 @@ class PulseDaemon:
         """The core cognitive loop. SENSE → EVALUATE → ACT."""
         # Install signal handlers via asyncio (C6 fix)
         loop = asyncio.get_running_loop()
+        self._shutdown_event = asyncio.Event()
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, self._handle_shutdown)
 
@@ -430,7 +432,11 @@ class PulseDaemon:
                 # Sleep until next loop
                 elapsed = time.time() - loop_start
                 sleep_time = max(0, self.config.daemon.loop_interval_seconds - elapsed)
-                await asyncio.sleep(sleep_time)
+                if sleep_time > 0:
+                    try:
+                        await asyncio.wait_for(self._shutdown_event.wait(), timeout=sleep_time)
+                    except asyncio.TimeoutError:
+                        pass
         finally:
             # Async cleanup INSIDE the event loop (C2 fix)
             logger.info("Shutting down async resources...")
@@ -917,6 +923,8 @@ class PulseDaemon:
         """Handle shutdown signal from asyncio loop."""
         logger.info("Received shutdown signal — initiating shutdown")
         self.running = False
+        if self._shutdown_event is not None:
+            self._shutdown_event.set()
 
     def _is_same_pulse_process(self, pid: int) -> bool:
         """Return True only when PID belongs to a live Pulse daemon process."""
