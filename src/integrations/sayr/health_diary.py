@@ -784,10 +784,9 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
 
         for section in text.split("\n## Task ")[1:]:
             header = section.splitlines()[0].strip()
-            body_tail = section[-2500:].lower()
-            if self._autonomous_task_blocked_until_external_signal(header, section):
-                continue
-            if self._autonomous_task_superseded_or_completed(header, section):
+            relevant_section = self._autonomous_task_relevant_section(section)
+            body_tail = relevant_section[-2500:].lower()
+            if self._autonomous_task_not_actionable_now(relevant_section):
                 continue
             if self._autonomous_task_tail_is_observation_only(body_tail):
                 continue
@@ -804,81 +803,69 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         return None
 
     @staticmethod
-    def _autonomous_task_superseded_or_completed(header: str, section: str) -> bool:
-        """Skip autonomous tasks whose old open tail has been moved elsewhere.
+    def _autonomous_task_relevant_section(section: str) -> str:
+        """Use the latest run note for fallback routing when it exists.
 
-        The fallback scanner is deliberately simple, but it must not keep
-        routing empty-unfinished pressure to an already completed map just
-        because old run notes still contain words like "future code step" or
-        "согласовать".  Task 002 is the current concrete case: its map is done,
-        and the real remaining implementation/validation work lives in Task 003.
+        Older run notes often preserve stale open tails for audit history.  The
+        fallback route should follow the current task state, not every old tail
+        that ever existed in the task section.
         """
 
-        normalized_header = header.lower()
-        body = section.lower()
+        runs = section.split("\n#### Run ")
+        if len(runs) <= 1:
+            return section
+        return runs[-1]
 
-        if "unfinished bounded-action implementation map" in normalized_header:
-            done_markers = (
-                "task 002 map выполнена",
-                "task 002 остаётся выполненной",
-                "implementation map уже закрыта",
-                "уже закрыта как map",
-            )
-            superseded_markers = (
-                "task 003",
-                "unfinished empty-routing integration preflight",
-                "живой следующий хвост не здесь",
-                "будущий code-step остаётся в task 003",
-            )
-            return any(marker in body for marker in done_markers) and any(
-                marker in body for marker in superseded_markers
-            )
+    @staticmethod
+    def _autonomous_task_not_actionable_now(section: str) -> bool:
+        """Return True when the latest task note explicitly says not to route.
 
-        return False
-
-    def _autonomous_task_blocked_until_external_signal(self, header: str, section: str) -> bool:
-        """Suppress fallback tasks that are complete until a concrete signal arrives.
-
-        Task 001 is the current guardrail case: the extractor cleanup is done,
-        and the only remaining tail is "wait for the next real goals trigger".
-        Empty-unfinished pressure cannot reveal anything new there, so repeated
-        routing to Task 001 should discharge pressure instead of waking Sayr.
+        This is intentionally semantic and task-agnostic: completed tasks,
+        tails moved to another Task, and observation-only waits are not
+        actionable unfinished work even if older text contains words such as
+        "open tail", "future code step", or "согласовать".
         """
 
-        normalized_header = header.lower()
         body = section.lower()
-        if "goals focus-area extractor cleanup" not in normalized_header:
-            return False
 
-        completion_markers = (
-            "task 001 остаётся выполненной",
-            "goals focus-area extractor cleanup по сути выполнен",
-            "задача по сути выполнена",
+        done_markers = (
+            "остаётся выполненной",
+            "по сути выполнен",
+            "по сути выполнена",
+            "уже закрыта",
+            "already closed",
+            "completed",
+            "done",
         )
-        wait_markers = (
-            "следующем реальном goals-trigger",
-            "следующего реального goals-trigger",
-            "живого goals-trigger",
-            "живой goals trigger",
-            "live goals snapshot tone",
-            "observation-only",
+        no_action_markers = (
+            "видимого действия для лисы сейчас не нужно",
+            "не требует видимого действия",
+            "no visible action",
+            "no_action",
+            "not_actionable_now",
+            "не требует работы",
         )
-        if not any(marker in body for marker in completion_markers):
-            return False
-        if not any(marker in body for marker in wait_markers):
-            return False
+        moved_markers = (
+            "живой следующий хвост не здесь",
+            "хвост не здесь",
+            "вынесен в `task",
+            "вынесен в task",
+            "перенесён в `task",
+            "перенесен в `task",
+            "перенесён в task",
+            "перенесен в task",
+            "остаётся в task",
+            "остается в task",
+            "lives in task",
+            "moved to task",
+        )
 
-        return self._observation_waiting("live goals snapshot tone")
+        is_done = any(marker in body for marker in done_markers)
+        says_no_action = any(marker in body for marker in no_action_markers)
+        moved_elsewhere = any(marker in body for marker in moved_markers)
+        unchanged_after_done = "**open tail**" in body and "без изменений" in body and is_done
 
-    def _observation_waiting(self, label: str) -> bool:
-        if not self.OBSERVATIONS.exists():
-            return False
-        try:
-            text = self.OBSERVATIONS.read_text().lower()
-        except Exception:
-            return False
-
-        return label.lower() in text and "status**: waiting" in text
+        return (is_done and says_no_action) or moved_elsewhere or unchanged_after_done
 
     @staticmethod
     def _autonomous_task_tail_is_observation_only(body_tail: str) -> bool:
