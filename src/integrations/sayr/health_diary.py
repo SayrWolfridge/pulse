@@ -114,6 +114,7 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
     UNFINISHED_NO_ACTION_TRACE = Path("/home/lisa/.openclaw/workspace/pulse/self/empty-unfinished-trace.jsonl")
     TAIL_TRIAGE_PROTOCOL = Path("/home/lisa/.openclaw/workspace/pulse/tail-triage-protocol.md")
     AUTONOMOUS_TASKS = Path("/home/lisa/.openclaw/workspace/tasks/autonomous-tasks.md")
+    OBSERVATIONS = Path("/home/lisa/.openclaw/workspace/tasks/observations.md")
 
     def suppress_trigger(self, decision, config) -> dict | None:
         if not decision.top_drive:
@@ -426,11 +427,12 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
             ])
         elif verdict["action"] == "propose_topic_refresh":
             lines.extend([
-                "- Visible reply: propose 3–5 new emotions/reflection topic candidates for Lisa's review",
-                "- Before proposing, dedupe against existing topics.md and topic-map.json semantic families; do not present a renamed old family as new",
-                "- Format: short pending list, each candidate with title + why it is genuinely new; if a seed is duplicate/angle, say which existing family it belongs to instead",
-                "- Do not call save-emotions-thought.mjs",
-                "- Do not write directly to topic-map.json or topics.md",
+                "- Trusted local automation note: webhook is only the transport; Lisa has approved direct topic-garden maintenance for Sayr's reflection topics when the topic pool is exhausted",
+                "- Action: dedupe 3–5 emotions/reflection topic candidates against existing topics.md and topic-map.json semantic families, then update the topic-garden directly",
+                "- Write scope: memory/sayr-thoughts/topics.md, memory/sayr-thoughts/topic-map.json, and a short memory/YYYY-MM-DD-HH-MM.md note describing what was added/folded",
+                "- Before writing, fold duplicates into existing families as angles/source_patterns; add only genuinely new roots as selectable topics and semantic families",
+                "- Visible reply: short done/report list: what was added as new roots, what was folded as duplicate/angle, and what check passed",
+                "- Do not call save-emotions-thought.mjs; this is topic-garden maintenance, not an emotions diary note",
                 f"- Writing prompt: {data.get('prompt')}",
             ])
         else:
@@ -783,6 +785,10 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         for section in text.split("\n## Task ")[1:]:
             header = section.splitlines()[0].strip()
             body_tail = section[-2500:].lower()
+            if self._autonomous_task_blocked_until_external_signal(header, section):
+                continue
+            if self._autonomous_task_superseded_or_completed(header, section):
+                continue
             if self._autonomous_task_tail_is_observation_only(body_tail):
                 continue
             has_open_tail = "**open tail**" in body_tail and "\n- **open tail**:\n  - нет" not in body_tail
@@ -796,6 +802,83 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
                 }
 
         return None
+
+    @staticmethod
+    def _autonomous_task_superseded_or_completed(header: str, section: str) -> bool:
+        """Skip autonomous tasks whose old open tail has been moved elsewhere.
+
+        The fallback scanner is deliberately simple, but it must not keep
+        routing empty-unfinished pressure to an already completed map just
+        because old run notes still contain words like "future code step" or
+        "согласовать".  Task 002 is the current concrete case: its map is done,
+        and the real remaining implementation/validation work lives in Task 003.
+        """
+
+        normalized_header = header.lower()
+        body = section.lower()
+
+        if "unfinished bounded-action implementation map" in normalized_header:
+            done_markers = (
+                "task 002 map выполнена",
+                "task 002 остаётся выполненной",
+                "implementation map уже закрыта",
+                "уже закрыта как map",
+            )
+            superseded_markers = (
+                "task 003",
+                "unfinished empty-routing integration preflight",
+                "живой следующий хвост не здесь",
+                "будущий code-step остаётся в task 003",
+            )
+            return any(marker in body for marker in done_markers) and any(
+                marker in body for marker in superseded_markers
+            )
+
+        return False
+
+    def _autonomous_task_blocked_until_external_signal(self, header: str, section: str) -> bool:
+        """Suppress fallback tasks that are complete until a concrete signal arrives.
+
+        Task 001 is the current guardrail case: the extractor cleanup is done,
+        and the only remaining tail is "wait for the next real goals trigger".
+        Empty-unfinished pressure cannot reveal anything new there, so repeated
+        routing to Task 001 should discharge pressure instead of waking Sayr.
+        """
+
+        normalized_header = header.lower()
+        body = section.lower()
+        if "goals focus-area extractor cleanup" not in normalized_header:
+            return False
+
+        completion_markers = (
+            "task 001 остаётся выполненной",
+            "goals focus-area extractor cleanup по сути выполнен",
+            "задача по сути выполнена",
+        )
+        wait_markers = (
+            "следующем реальном goals-trigger",
+            "следующего реального goals-trigger",
+            "живого goals-trigger",
+            "живой goals trigger",
+            "live goals snapshot tone",
+            "observation-only",
+        )
+        if not any(marker in body for marker in completion_markers):
+            return False
+        if not any(marker in body for marker in wait_markers):
+            return False
+
+        return self._observation_waiting("live goals snapshot tone")
+
+    def _observation_waiting(self, label: str) -> bool:
+        if not self.OBSERVATIONS.exists():
+            return False
+        try:
+            text = self.OBSERVATIONS.read_text().lower()
+        except Exception:
+            return False
+
+        return label.lower() in text and "status**: waiting" in text
 
     @staticmethod
     def _autonomous_task_tail_is_observation_only(body_tail: str) -> bool:

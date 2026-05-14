@@ -183,6 +183,7 @@ def _patch_unfinished_paths(monkeypatch, tmp_path, hypotheses):
     monkeypatch.setattr(SayrHealthDiaryIntegration, "AUTONOMOUS_TASKS", tmp_path / "autonomous-tasks.md")
     monkeypatch.setattr(SayrHealthDiaryIntegration, "UNFINISHED_NO_ACTION_TRACE", tmp_path / "empty-unfinished-trace.jsonl")
     monkeypatch.setattr(SayrHealthDiaryIntegration, "TAIL_TRIAGE_PROTOCOL", tmp_path / "tail-triage-protocol.md")
+    monkeypatch.setattr(SayrHealthDiaryIntegration, "OBSERVATIONS", tmp_path / "observations.md")
     return SayrHealthDiaryIntegration()
 
 
@@ -444,6 +445,82 @@ def test_empty_unfinished_skips_observation_only_autonomous_tail(monkeypatch, tm
     record = json.loads(integration.UNFINISHED_NO_ACTION_TRACE.read_text(encoding="utf-8").strip())
     assert record["drive"] == "unfinished"
     assert record["discharge"] == "strong"
+
+
+def test_empty_unfinished_suppresses_task001_until_live_goals_trigger(monkeypatch, tmp_path):
+    integration = _patch_unfinished_paths(monkeypatch, tmp_path, [])
+    integration.AUTONOMOUS_TASKS.write_text(
+        """
+# Autonomous tasks
+
+## Task 001 — goals focus-area extractor cleanup
+### Runs
+#### Run 2026-05-14 03:54
+- **Result**:
+  - Task 001 остаётся выполненной; новый living question из fallback-review не появился
+- **Open tail**:
+  - без изменений: при следующем реальном goals-trigger проверить тон `GOALS SNAPSHOT` и отсутствие сырого task/system шума
+- **Question**:
+  - нет
+""".strip(),
+        encoding="utf-8",
+    )
+    integration.OBSERVATIONS.write_text(
+        """
+# Observations
+
+## Observation 001 — live goals snapshot tone
+- **Object**: `GOALS SNAPSHOT` в live Pulse-trigger
+- **Signal**: следующий реальный `goals` trigger от Pulse
+- **Status**: waiting
+""".strip(),
+        encoding="utf-8",
+    )
+
+    verdict = integration._unfinished_preflight(record_trace=True)
+
+    assert verdict["action"] == "no_action"
+    assert "no existing bounded" in verdict["reason"]
+    record = json.loads(integration.UNFINISHED_NO_ACTION_TRACE.read_text(encoding="utf-8").strip())
+    assert record["drive"] == "unfinished"
+    assert record["discharge"] == "strong"
+
+
+def test_empty_unfinished_skips_completed_task002_superseded_by_task003(monkeypatch, tmp_path):
+    integration = _patch_unfinished_paths(monkeypatch, tmp_path, [])
+    integration.AUTONOMOUS_TASKS.write_text(
+        """
+# Autonomous tasks
+
+## Task 002 — unfinished bounded-action implementation map
+#### Run 2026-04-25 13:26
+- **Result**:
+  - Task 002 map выполнена; минимальная точка внедрения — integration layer, не drive engine
+- **Open tail**:
+  - согласовать с Лисой будущий code diff, если хотим переносить contract из протокола в runtime prompt
+
+#### Run 2026-05-14 09:27
+- **What was done**:
+  - подтверждено, что Task 002 уже закрыта как map/review, а живой следующий хвост не здесь, а в Task 003: pressure-relief trace для empty-`unfinished`
+- **Result**:
+  - Task 002 остаётся выполненной; этот empty-`unfinished` сигнал не требует видимого действия для Лисы
+- **Open tail**:
+  - без изменений: если возвращаться к коду, это отдельный согласованный шаг по Task 003, не повторный mapping Task 002
+
+## Task 003 — unfinished empty-routing integration preflight
+#### Run 2026-05-13 12:20
+- **Open tail**:
+  - отдельным согласованным code-step вне этой правки добавить/проверить pressure-relief trace
+""".strip(),
+        encoding="utf-8",
+    )
+
+    verdict = integration._unfinished_preflight(record_trace=True)
+
+    assert verdict["action"] == "route_to_task_crystallization"
+    assert "Task 003" in verdict["object"]["object"]
+    assert "Task 002" not in verdict["object"]["object"]
+    assert not integration.UNFINISHED_NO_ACTION_TRACE.exists()
 
 
 def test_empty_unfinished_keeps_actionable_autonomous_tail(monkeypatch, tmp_path):
