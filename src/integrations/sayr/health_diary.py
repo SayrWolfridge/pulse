@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 import time
 from datetime import datetime
@@ -784,6 +785,9 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
 
         for section in text.split("\n## Task ")[1:]:
             header = section.splitlines()[0].strip()
+            status = self._autonomous_task_status(section)
+            if status in {"waiting_external_signal", "waiting_lisa", "done", "superseded"}:
+                continue
             relevant_section = self._autonomous_task_relevant_section(section)
             body_tail = relevant_section[-2500:].lower()
             if self._autonomous_task_not_actionable_now(relevant_section):
@@ -801,6 +805,15 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
                 }
 
         return None
+
+    @staticmethod
+    def _autonomous_task_status(section: str) -> str | None:
+        """Read the task-level machine status from the stable task contract."""
+
+        match = re.search(r"(?im)^- \*\*Status\*\*:\s*([a-z_\-]+)\s*$", section)
+        if not match:
+            return None
+        return match.group(1).strip().lower().replace("-", "_")
 
     @staticmethod
     def _autonomous_task_relevant_section(section: str) -> str:

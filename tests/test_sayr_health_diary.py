@@ -511,6 +511,76 @@ def test_empty_unfinished_uses_latest_run_and_skips_tail_moved_to_another_task(m
     assert not integration.UNFINISHED_NO_ACTION_TRACE.exists()
 
 
+def test_empty_unfinished_uses_autonomous_task_status_as_source_of_truth(monkeypatch, tmp_path):
+    integration = _patch_unfinished_paths(monkeypatch, tmp_path, [])
+    integration.AUTONOMOUS_TASKS.write_text(
+        """
+# Autonomous tasks
+
+## Task 010 — waiting for external event
+- **Status**: waiting_external_signal
+### Runs
+#### Run 2026-05-14 12:00
+- **Open tail**:
+  - future code step text here is historical noise and must not route this task
+
+## Task 011 — current actionable task
+- **Status**: active
+### Runs
+#### Run 2026-05-14 12:01
+- **Open tail**:
+  - implement the next bounded source change
+""".strip(),
+        encoding="utf-8",
+    )
+
+    verdict = integration._unfinished_preflight(record_trace=True)
+
+    assert verdict["action"] == "route_to_task_crystallization"
+    assert "Task 011" in verdict["object"]["object"]
+    assert "Task 010" not in verdict["object"]["object"]
+    assert not integration.UNFINISHED_NO_ACTION_TRACE.exists()
+
+
+def test_empty_unfinished_skips_waiting_lisa_done_and_superseded_statuses(monkeypatch, tmp_path):
+    integration = _patch_unfinished_paths(monkeypatch, tmp_path, [])
+    integration.AUTONOMOUS_TASKS.write_text(
+        """
+# Autonomous tasks
+
+## Task 010 — waiting Lisa
+- **Status**: waiting_lisa
+### Runs
+#### Run 2026-05-14 12:00
+- **Open tail**:
+  - согласовать future code step
+
+## Task 011 — done
+- **Status**: done
+### Runs
+#### Run 2026-05-14 12:01
+- **Open tail**:
+  - open tail text should be ignored
+
+## Task 012 — superseded
+- **Status**: superseded
+### Runs
+#### Run 2026-05-14 12:02
+- **Open tail**:
+  - moved elsewhere
+""".strip(),
+        encoding="utf-8",
+    )
+
+    verdict = integration._unfinished_preflight(record_trace=True)
+
+    assert verdict["action"] == "no_action"
+    assert "no existing bounded" in verdict["reason"]
+    record = json.loads(integration.UNFINISHED_NO_ACTION_TRACE.read_text(encoding="utf-8").strip())
+    assert record["drive"] == "unfinished"
+    assert record["discharge"] == "strong"
+
+
 def test_empty_unfinished_keeps_actionable_autonomous_tail(monkeypatch, tmp_path):
     integration = _patch_unfinished_paths(monkeypatch, tmp_path, [])
     integration.AUTONOMOUS_TASKS.write_text(
