@@ -2,7 +2,7 @@
 name: weather-market-scan
 description: Scan Polymarket weather markets for FLOOR/CEILING directional opportunities during GFS windows
 version: "1.0"
-enabled: true
+enabled: false
 
 triggers:
   drives:

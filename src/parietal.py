@@ -44,6 +44,7 @@ _IGNORED_DIRS = {
     ".venv",
     "dist",
     "build",
+    "research",
 }
 
 

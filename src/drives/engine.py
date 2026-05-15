@@ -15,9 +15,11 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from pulse.src import thalamus
 from pulse.src.core.config import PulseConfig
 from pulse.src.state.persistence import StatePersistence
 
@@ -291,6 +293,157 @@ class DriveEngine:
             logger.debug(
                 f"Emotional state changed: intensity={data.get('intensity')}, spiked emotions +0.15"
             )
+
+        self._refresh_health_rules()
+
+    def _read_cached_text(self, path: Path) -> tuple[Optional[str], bool]:
+        _ABSENT = -1.0
+        key = str(path)
+        try:
+            mtime = path.stat().st_mtime
+        except FileNotFoundError:
+            if self._source_cache.get(key, (None,))[0] != _ABSENT:
+                self._source_cache[key] = (_ABSENT, None)
+            return None, False
+        except OSError:
+            return None, False
+
+        cached = self._source_cache.get(key)
+        if cached and cached[0] == mtime:
+            return cached[1], False
+        try:
+            data = path.read_text()
+        except Exception:
+            return None, False
+        self._source_cache[key] = (mtime, data)
+        return data, True
+
+    def _get_nested(self, data: dict, field: str):
+        current = data
+        for part in field.split("."):
+            if not isinstance(current, dict) or part not in current:
+                return None
+            current = current[part]
+        return current
+
+    def _condition_matches(self, condition: dict, state: dict) -> bool:
+        if "any_of" in condition:
+            return any(self._condition_matches(item, state) for item in condition["any_of"])
+
+        field = condition.get("field")
+        op = condition.get("op")
+        value = self._get_nested(state, field) if field else None
+
+        if op == "==":
+            return value == condition.get("value")
+        if op == "<=":
+            return value is not None and value <= condition.get("value")
+        if op == ">=":
+            return value is not None and value >= condition.get("value")
+        if op == "<":
+            return value is not None and value < condition.get("value")
+        if op == ">":
+            return value is not None and value > condition.get("value")
+        if op == "is_null":
+            return value is None
+        if op == "is_not_null":
+            return value is not None
+        return False
+
+    def _refresh_health_rules(self):
+        workspace = self.config.workspace
+        workspace_root = Path(str(workspace.root)).expanduser()
+        rules_path = workspace_root / "pulse/self/health-rules.json"
+        state_path = workspace_root / "pulse/self/health-state.json"
+        fired_path = Path(self.config.state.dir).expanduser() / "health-rules-fired.json"
+
+        raw_rules, _ = self._read_cached_text(rules_path)
+        state_data, _ = self._read_cached_json(state_path)
+        if not raw_rules or not isinstance(state_data, dict):
+            return
+
+        try:
+            rules_doc = json.loads(raw_rules)
+        except Exception:
+            logger.warning("Health rules JSON invalid: %s", rules_path)
+            return
+
+        if not rules_doc.get("enabled", False):
+            return
+
+        if "health" not in self.drives:
+            self.drives["health"] = Drive(name="health", category="health", weight=0.7)
+
+        health_drive = self.drives["health"]
+        health_drive.source_data.pop("message", None)
+        health_drive.source_data.pop("rule_id", None)
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        fired_state = {}
+        if fired_path.exists():
+            try:
+                fired_state = json.loads(fired_path.read_text())
+            except Exception:
+                fired_state = {}
+        fired_today = set(fired_state.get(today, []))
+        changed_fired = False
+
+        for rule in rules_doc.get("rules", []):
+            if not rule.get("id") or not rule.get("effect"):
+                continue
+            if rule.get("once_per_day") and rule["id"] in fired_today:
+                continue
+
+            time_after = rule.get("time_after")
+            if time_after:
+                try:
+                    hh, mm = map(int, str(time_after).split(":"))
+                    now = datetime.now()
+                    if (now.hour, now.minute) < (hh, mm):
+                        continue
+                except Exception:
+                    pass
+
+            conditions = rule.get("conditions", [])
+            if not conditions or not all(self._condition_matches(cond, state_data) for cond in conditions):
+                continue
+
+            effect = rule["effect"]
+            drive_name = effect.get("drive", "health")
+            if drive_name not in self.drives:
+                self.drives[drive_name] = Drive(name=drive_name, category=drive_name, weight=0.7)
+            drive = self.drives[drive_name]
+            delta = float(effect.get("pressure_delta", 0.0) or 0.0)
+            if delta > 0:
+                drive.spike(delta, self.config.drives.max_pressure)
+
+            message = effect.get("message")
+            if message:
+                drive.source_data["message"] = message
+                drive.source_data["rule_id"] = rule["id"]
+                try:
+                    thalamus.append({
+                        "source": "health_state",
+                        "type": "health_rule",
+                        "salience": min(1.0, max(0.1, delta)),
+                        "data": {
+                            "rule_id": rule["id"],
+                            "drive": drive_name,
+                            "message": message,
+                            "pressure_delta": delta,
+                        },
+                    })
+                except Exception as exc:
+                    logger.debug("Health rule thalamus append failed: %s", exc)
+
+            if rule.get("once_per_day"):
+                fired_today.add(rule["id"])
+                changed_fired = True
+
+        if changed_fired:
+            fired_path.parent.mkdir(parents=True, exist_ok=True)
+            fired_state = {today: sorted(fired_today)}
+            fired_path.write_text(json.dumps(fired_state, ensure_ascii=False, indent=2))
 
     def on_trigger_success(self, decision):
         """Called after a successful agent turn. Decay all drives proportionally."""

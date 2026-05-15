@@ -90,6 +90,7 @@ class PriorityEvaluator:
                     reason=f"single_drive_threshold: {drive_state.top_drive.name}",
                     total_pressure=drive_state.total_pressure,
                     top_drive=drive_state.top_drive,
+                    sensor_context=str(drive_state.top_drive.source_data.get("message", "")),
                 )
 
         # Check combined threshold
@@ -99,6 +100,7 @@ class PriorityEvaluator:
                 reason="combined_threshold",
                 total_pressure=drive_state.total_pressure,
                 top_drive=drive_state.top_drive,
+                sensor_context=str((drive_state.top_drive.source_data.get("message", "") if drive_state.top_drive else "")),
             )
 
         # No trigger — but if pressure is significant, recommend GENERATE

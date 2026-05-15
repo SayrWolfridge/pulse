@@ -10,7 +10,9 @@ Runs on a separate port, no auth required (read-only, local-only).
 import asyncio
 import json
 import logging
+import subprocess
 import time
+from pathlib import Path
 from aiohttp import web
 from pulse.src import __version__
 from typing import TYPE_CHECKING
@@ -35,6 +37,7 @@ class HealthServer:
         self._app.router.add_get("/evolution", self._handle_evolution)
         self._app.router.add_get("/mutations", self._handle_mutations)
         self._app.router.add_post("/feedback", self._handle_feedback)
+        self._app.router.add_post("/openclaw/turn-result", self._handle_openclaw_turn_result)
         self._app.router.add_get("/metrics", self._handle_metrics)
         self._runner: web.AppRunner | None = None
 
@@ -161,6 +164,77 @@ class HealthServer:
             self.daemon.mutator.get_state(),
             dumps=lambda o: json.dumps(o, default=str),
         )
+
+    def _authorized_local_callback(self, request: web.Request) -> bool:
+        peer = request.remote
+        if peer not in {"127.0.0.1", "::1", "localhost", None}:
+            return False
+        token = getattr(self.daemon.config.openclaw, "webhook_token", "") or ""
+        if not token:
+            return True
+        auth = request.headers.get("Authorization", "")
+        return auth == f"Bearer {token}"
+
+    async def _handle_openclaw_turn_result(self, request: web.Request) -> web.Response:
+        """Accept trusted local OpenClaw hook result callbacks.
+
+        This is the mechanical completion bridge for Pulse-originated turns:
+        OpenClaw sends the final visible agent text back here, and Pulse owns
+        save/completion bookkeeping without asking Sayr to run shell commands
+        from the webhook prompt body.
+        """
+        if not self._authorized_local_callback(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+
+        kind = data.get("kind")
+        status = data.get("status")
+        run_id = data.get("runId")
+        if kind != "pulse.emotions.write_diary_note":
+            return web.json_response({"ok": True, "ignored": "unsupported kind"})
+        if status != "ok":
+            logger.warning("OpenClaw turn result not saved: status=%s runId=%s", status, run_id)
+            return web.json_response({"ok": True, "ignored": "non-ok status"})
+
+        text = data.get("outputText") or data.get("summary") or ""
+        if not isinstance(text, str) or not text.strip():
+            return web.json_response({"error": "missing outputText"}, status=400)
+
+        workspace = Path("/home/lisa/.openclaw/workspace")
+        script = workspace / "scripts/save-emotions-thought.mjs"
+        if not script.exists():
+            return web.json_response({"error": "save script missing"}, status=500)
+
+        try:
+            result = subprocess.run(
+                ["node", str(script)],
+                cwd=str(workspace),
+                input=text.rstrip() + "\n",
+                text=True,
+                capture_output=True,
+                timeout=20,
+            )
+        except Exception as exc:
+            logger.warning("OpenClaw turn result save failed: %s", exc)
+            return web.json_response({"error": str(exc)}, status=500)
+
+        if result.returncode != 0:
+            logger.warning(
+                "OpenClaw turn result save failed: %s",
+                (result.stderr or result.stdout or "").strip()[:500],
+            )
+            return web.json_response({"error": "save failed"}, status=500)
+
+        try:
+            saved = json.loads(result.stdout or "{}")
+        except Exception:
+            saved = {"stdout": result.stdout}
+        logger.info("OpenClaw emotions turn saved mechanically: runId=%s", run_id)
+        return web.json_response({"ok": True, "saved": saved})
 
     async def _handle_feedback(self, request: web.Request) -> web.Response:
         """Accept turn feedback from the agent.

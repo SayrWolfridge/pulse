@@ -34,7 +34,7 @@ class DefaultIntegration(Integration):
         parts.append(
             "Check if there's something worth doing for this drive. "
             "If сейчас не время, ресурса нет, or the drive-specific block says no visible action is needed — "
-            "say so briefly and do not invent work."
+            "briefly tell Lisa what you reviewed/did and why you are stopping; do not invent work."
         )
 
         return "\n".join(parts)

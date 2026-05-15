@@ -2,7 +2,7 @@
 name: memory-maintenance
 description: Consolidate and review daily memory files when idle and drives are low
 version: "1.0"
-enabled: true
+enabled: false
 
 triggers:
   drives:

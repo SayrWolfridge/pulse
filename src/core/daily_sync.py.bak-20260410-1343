@@ -19,20 +19,9 @@ class DailyNoteSync:
     """Appends Pulse events to the agent's daily notes."""
 
     def __init__(self, config: PulseConfig):
-        # Allow daily_notes to be either workspace-relative ("memory/")
-        # or absolute ("~/.pulse/logs/daily-notes/" or "/var/log/pulse/...").
-        daily = config.workspace.daily_notes
-        daily_path = Path(daily).expanduser()
-
-        if daily_path.is_absolute():
-            # Absolute path: use as-is, don't join with workspace.root
-            self.daily_dir = daily_path
-        else:
-            # Relative path: resolve under workspace root
-            self.daily_dir = (
-                Path(config.workspace.root).expanduser() / daily
-            )
-
+        self.daily_dir = (
+            Path(config.workspace.root).expanduser() / config.workspace.daily_notes
+        )
         self._last_date: str = ""
         self._header_written: bool = False
 

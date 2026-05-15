@@ -150,6 +150,8 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
 
         if decision.top_drive.name == "unfinished":
             verdict = self._unfinished_preflight(record_trace=True)
+            if verdict["action"].startswith("handoff_to_"):
+                return self._suppress_unfinished_handoff(decision, verdict)
             if verdict["action"] != "no_action":
                 return None
             feedback = {
@@ -647,8 +649,8 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         fallback = self._unfinished_fallback_object()
         if fallback:
             return {
-                "action": f"route_to_{fallback['kind']}",
-                "reason": f"open_hypotheses_count=0; existing {fallback['kind']} object found",
+                "action": f"handoff_to_{fallback['kind']}",
+                "reason": f"open_hypotheses_count=0; handoff target {fallback['kind']} object found",
                 "object": fallback,
             }
 
@@ -656,6 +658,39 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         if record_trace:
             self._record_empty_unfinished_trace(reason, discharge="strong")
         return {"action": "no_action", "reason": reason, "object": None, "discharge": "strong"}
+
+    def _suppress_unfinished_handoff(self, decision, verdict: dict) -> dict:
+        obj = verdict.get("object") or {}
+        kind = obj.get("kind") or "unknown"
+        feedback = {
+            "drives_addressed": ["unfinished"],
+            "outcome": "success",
+            "summary": f"Unfinished had no own object; recorded handoff to {kind} and suppressed direct unfinished wake: {verdict['reason']}",
+        }
+        decay_overrides = {
+            "unfinished": float(getattr(decision.top_drive, "pressure", 0.0) or 0.0)
+        }
+
+        if kind == "curiosity":
+            curiosity_verdict = self._curiosity_preflight(record_trace=True)
+            feedback["handoff"] = {
+                "from": "unfinished",
+                "to": "curiosity",
+                "target_action": curiosity_verdict["action"],
+                "target_reason": curiosity_verdict["reason"],
+            }
+            if curiosity_verdict["action"] == "no_action":
+                feedback["summary"] += f"; curiosity also suppressed: {curiosity_verdict['reason']}"
+                if curiosity_verdict.get("discharge") == "strong":
+                    decay_overrides["curiosity"] = float(getattr(decision.top_drive, "pressure", 0.0) or 0.0)
+            else:
+                feedback["summary"] += "; curiosity remains the live protocol for its own future turn"
+
+        feedback["decay_overrides"] = decay_overrides
+        return {
+            "reason": f"unfinished preflight handoff: {verdict['reason']}",
+            "feedback": feedback,
+        }
 
     def _load_unfinished_hypotheses(self) -> list[dict]:
         if not self.HYPOTHESES.exists():
@@ -933,29 +968,20 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         return has_observation and not has_action
 
     def _unfinished_curiosity_object(self) -> dict | None:
-        if not self.CURIOSITY.exists():
-            return None
-        try:
-            data = json.loads(self.CURIOSITY.read_text())
-        except Exception:
+        question = self._open_curiosity_question()
+        if not question:
             return None
 
-        questions = data.get("questions") if isinstance(data, dict) else []
-        for question in questions or []:
-            if not isinstance(question, dict):
-                continue
-            if question.get("status") != "open":
-                continue
-            text = question.get("text") or question.get("title") or question.get("id")
-            if text:
-                return {
-                    "kind": "curiosity",
-                    "object": text,
-                    "allowed_next_step": "Route this to the curiosity drive/protocol; do not treat it as unfinished work. You may append one related bounded curiosity question to the list if the empty unfinished signal reveals a genuinely new question.",
-                    "result_sink": str(self.CURIOSITY),
-                }
+        text = question.get("text") or question.get("title") or question.get("id")
+        if not text:
+            return None
 
-        return None
+        return {
+            "kind": "curiosity",
+            "object": text,
+            "allowed_next_step": "Route this to the curiosity drive/protocol using this currently actionable curiosity question; do not treat deferred/cooldown questions as unfinished work. You may append one related bounded curiosity question to the list if the empty unfinished signal reveals a genuinely new question.",
+            "result_sink": str(self.CURIOSITY),
+        }
 
     def _unfinished_goals_object(self) -> dict | None:
         if not self.GOALS_SNAPSHOT.exists():
@@ -1031,18 +1057,19 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
                 "- stop_condition: pressure relieved; suppress the wake after writing the trace",
             ])
 
-        if verdict["action"].startswith("route_to_"):
+        if verdict["action"].startswith("handoff_to_"):
             obj = verdict["object"] or {}
             return "\n".join([
-                "Empty-unfinished routing contract:",
-                "- object: no open hypotheses; use only the existing bounded fallback below",
-                f"- route: {obj.get('kind')}",
+                "Empty-unfinished handoff contract:",
+                "- object: no open hypotheses; unfinished has no own bounded object",
+                f"- handoff_to: {obj.get('kind')}",
                 f"- existing_object: {obj.get('object')}",
-                f"- allowed_next_step: {obj.get('allowed_next_step')}",
-                "- allowed_capture: if this fallback reveals a genuinely new living question, append at most one `status=open` curiosity question to the result sink; do not duplicate the existing object",
+                f"- target_protocol_hint: {obj.get('allowed_next_step')}",
+                "- handoff_rule: record/suppress the unfinished wake here; the target drive must decide actionability using its own preflight and source of truth",
+                "- no_embedded_target_logic: do not run a second copy of the target protocol inside unfinished",
                 "- forbidden_without_lisa: no automatic task creation, no hypothesis closure, no live experiments, no config changes, no daemon/runtime restart",
                 f"- result_sink: {obj.get('result_sink')}",
-                "- stop_condition: one bounded review/capture in that target protocol; do not continue searching for work",
+                "- stop_condition: handoff recorded; stop this unfinished turn unless the target drive independently wakes later",
             ])
 
         open_items = self._open_unfinished_hypotheses()

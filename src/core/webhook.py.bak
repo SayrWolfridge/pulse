@@ -24,22 +24,15 @@ logger = logging.getLogger("pulse.webhook")
 class OpenClawWebhook:
     """Triggers OpenClaw agent turns via webhook."""
 
-    def __init__(self, config: PulseConfig):
+    def __init__(self, config: PulseConfig, daemon=None):
         self.url = config.openclaw.webhook_url
         self.token = config.openclaw.webhook_token
         self.session_mode = config.openclaw.session_mode
         self.deliver = config.openclaw.deliver
         self.isolated_model = config.openclaw.isolated_model
-        self.session_key = config.openclaw.session_key
-        self.result_callback_url = f"http://127.0.0.1:{config.daemon.health_port}/openclaw/turn-result"
         self._session: Optional[aiohttp.ClientSession] = None
-
-        # DEBUG: логируем, что мы вообще получили из конфига
-        logger.info(
-            "[PULSE→HOOK INIT] session_mode=%s session_key=%s",
-            self.session_mode,
-            self.session_key,
-        )
+        # Optional back-reference to daemon for state updates
+        self._daemon = daemon
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -76,33 +69,22 @@ class OpenClawWebhook:
             "deliver": self.deliver,
         }
 
-        result_callback_kind = self._result_callback_kind(message)
-        if result_callback_kind:
-            payload["resultCallback"] = {
-                "url": self.result_callback_url,
-                "kind": result_callback_kind,
-            }
-            if self.token:
-                payload["resultCallback"]["token"] = self.token
+        # record last payload for daemon to persist into state
+        self._last_payload = payload
 
-        # In main mode, use explicit sessionKey from config (как у ambient)
-        if self.session_mode == "main" and self.session_key:
-            payload["sessionKey"] = self.session_key
+        # In main mode, pin to Lisa's primary Telegram session
+        if self.session_mode == "main":
+            payload["sessionKey"] = "agent:main:telegram:default:direct:312058326"
             payload["channel"] = "telegram"
-            payload["to"] = "312058326"
-
-        # DEBUG: логируем точный payload до отправки (включая sessionKey/channel/to)
-        try:
-            safe_headers = {k: ("***" if k.lower() == "authorization" else v) for k, v in headers.items()}
-            logger.info("[PULSE→HOOK] url=%s headers=%s payload_json=%s", self.url, safe_headers, json.dumps(payload, ensure_ascii=False))
-        except Exception as log_err:
-            logger.warning(f"Failed to log webhook payload: {log_err}")
+            payload["to"] = 312058326
 
         # In isolated mode, tell OpenClaw to spawn a separate session
         if self.session_mode == "isolated":
             payload["isolated"] = True
+            # НЕ передавать model: OpenClaw сам подставит дефолт для isolated сессии
             if self.isolated_model:
-                payload["model"] = self.isolated_model
+                # payload["model"] = self.isolated_model  # закомментировано — больше не вставлять model в payload
+
 
         try:
             async with session.post(
@@ -137,11 +119,6 @@ class OpenClawWebhook:
         except Exception as e:
             logger.error(f"Webhook unexpected error: {e}")
             return False
-
-    def _result_callback_kind(self, message: str) -> str | None:
-        if "EMOTIONAL LANDSCAPE" in message and "- Mode: write_diary_note" in message:
-            return "pulse.emotions.write_diary_note"
-        return None
 
     async def wake(self, text: str) -> bool:
         """

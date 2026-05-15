@@ -2,7 +2,7 @@
 name: constellation-health
 description: Check all constellation agent gateways are running and report any that are down
 version: "1.0"
-enabled: true
+enabled: false
 
 triggers:
   drives:

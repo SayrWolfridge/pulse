@@ -363,7 +363,7 @@ def test_empty_unfinished_without_object_requests_strong_discharge(monkeypatch, 
     assert record["pressure_relief"]["stop_cleanly"] == "pressure relieved; no new action required"
 
 
-def test_empty_unfinished_routes_to_existing_curiosity_object(monkeypatch, tmp_path):
+def test_empty_unfinished_hands_off_to_existing_curiosity_object(monkeypatch, tmp_path):
     integration = _patch_unfinished_paths(monkeypatch, tmp_path, [])
     integration.CURIOSITY.write_text(
         json.dumps({"questions": [{"id": "c1", "text": "Как держать хвосты мягко?", "status": "open"}]}),
@@ -371,16 +371,49 @@ def test_empty_unfinished_routes_to_existing_curiosity_object(monkeypatch, tmp_p
     )
 
     verdict = integration._unfinished_preflight(record_trace=True)
-    assert verdict["action"] == "route_to_curiosity"
-    assert "existing curiosity object found" in verdict["reason"]
+    assert verdict["action"] == "handoff_to_curiosity"
+    assert "handoff target curiosity object found" in verdict["reason"]
     assert not integration.UNFINISHED_NO_ACTION_TRACE.exists()
 
     block = integration._build_unfinished_block()
-    assert "Empty-unfinished routing contract" in block
-    assert "route: curiosity" in block
+    assert "Empty-unfinished handoff contract" in block
+    assert "handoff_to: curiosity" in block
     assert "Как держать хвосты мягко?" in block
-    assert "allowed_capture" in block
-    assert "append at most one `status=open` curiosity question" in block
+    assert "handoff_rule" in block
+    assert "no_embedded_target_logic" in block
+
+
+def test_empty_unfinished_skips_deferred_curiosity_and_routes_to_next_open_question(monkeypatch, tmp_path):
+    integration = _patch_unfinished_paths(monkeypatch, tmp_path, [])
+    integration.CURIOSITY.write_text(
+        json.dumps(
+            {
+                "questions": [
+                    {
+                        "id": "c2",
+                        "text": "Какой должна быть живая рабочая память Сэйра?",
+                        "status": "open",
+                        "not_touch_until": "2999-05-20T00:00:00+03:00",
+                    },
+                    {
+                        "id": "c3",
+                        "text": "Как постепенно систематизировать размышления Сэйра?",
+                        "status": "open",
+                        "mode": "sayr_thoughts_consolidation",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    verdict = integration._unfinished_preflight(record_trace=True)
+    assert verdict["action"] == "handoff_to_curiosity"
+    assert verdict["object"]["object"] == "Как постепенно систематизировать размышления Сэйра?"
+
+    block = integration._build_unfinished_block()
+    assert "Как постепенно систематизировать размышления Сэйра?" in block
+    assert "Какой должна быть живая рабочая память Сэйра?" not in block
 
 
 def test_empty_unfinished_without_object_writes_no_action_trace(monkeypatch, tmp_path):
@@ -396,6 +429,46 @@ def test_empty_unfinished_without_object_writes_no_action_trace(monkeypatch, tmp
     assert record["outcome"] == "not_actionable_now"
     assert record["drive"] == "unfinished"
     assert record["pressure_relief"]["name_pressure"] == "residual unfinished pressure / empty signal"
+
+
+def test_empty_unfinished_handoff_to_deferred_curiosity_suppresses_both_drives(monkeypatch, tmp_path):
+    integration = _patch_unfinished_paths(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(type(integration), "CURIOSITY_NO_ACTION_TRACE", tmp_path / "empty-curiosity-trace.jsonl")
+    monkeypatch.setattr(
+        integration,
+        "_unfinished_curiosity_object",
+        lambda: {
+            "kind": "curiosity",
+            "object": "Какой должна быть живая рабочая память Сэйра?",
+            "allowed_next_step": "handoff only; target drive owns actionability",
+            "result_sink": str(integration.CURIOSITY),
+        },
+    )
+    integration.CURIOSITY.write_text(
+        json.dumps({
+            "questions": [
+                {
+                    "id": "c2",
+                    "text": "Какой должна быть живая рабочая память Сэйра?",
+                    "status": "open",
+                    "not_touch_until": "2999-05-20T00:00:00+03:00",
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+    decision = SimpleNamespace(top_drive=SimpleNamespace(name="unfinished", pressure=0.45))
+
+    suppression = integration.suppress_trigger(decision, config=None)
+
+    assert suppression is not None
+    assert suppression["feedback"]["handoff"]["from"] == "unfinished"
+    assert suppression["feedback"]["handoff"]["to"] == "curiosity"
+    assert suppression["feedback"]["handoff"]["target_action"] == "no_action"
+    assert suppression["feedback"]["decay_overrides"] == {"unfinished": 0.45, "curiosity": 0.45}
+    curiosity_record = json.loads(integration.CURIOSITY_NO_ACTION_TRACE.read_text(encoding="utf-8").strip())
+    assert curiosity_record["drive"] == "curiosity"
+    assert curiosity_record["action"] == "no_action"
 
 
 def test_empty_unfinished_no_action_contract_names_pressure_relief(monkeypatch, tmp_path):
@@ -505,7 +578,7 @@ def test_empty_unfinished_uses_latest_run_and_skips_tail_moved_to_another_task(m
 
     verdict = integration._unfinished_preflight(record_trace=True)
 
-    assert verdict["action"] == "route_to_task_crystallization"
+    assert verdict["action"] == "handoff_to_task_crystallization"
     assert "Task 003" in verdict["object"]["object"]
     assert "Task 002" not in verdict["object"]["object"]
     assert not integration.UNFINISHED_NO_ACTION_TRACE.exists()
@@ -536,7 +609,7 @@ def test_empty_unfinished_uses_autonomous_task_status_as_source_of_truth(monkeyp
 
     verdict = integration._unfinished_preflight(record_trace=True)
 
-    assert verdict["action"] == "route_to_task_crystallization"
+    assert verdict["action"] == "handoff_to_task_crystallization"
     assert "Task 011" in verdict["object"]["object"]
     assert "Task 010" not in verdict["object"]["object"]
     assert not integration.UNFINISHED_NO_ACTION_TRACE.exists()
@@ -598,7 +671,7 @@ def test_empty_unfinished_keeps_actionable_autonomous_tail(monkeypatch, tmp_path
 
     verdict = integration._unfinished_preflight(record_trace=True)
 
-    assert verdict["action"] == "route_to_task_crystallization"
+    assert verdict["action"] == "handoff_to_task_crystallization"
     assert "Task 003" in verdict["object"]["object"]
     assert not integration.UNFINISHED_NO_ACTION_TRACE.exists()
 
@@ -609,13 +682,13 @@ def test_empty_unfinished_routes_to_tail_triage_protocol(monkeypatch, tmp_path):
 
     verdict = integration._unfinished_preflight(record_trace=True)
 
-    assert verdict["action"] == "route_to_tail_triage"
-    assert "existing tail_triage object found" in verdict["reason"]
+    assert verdict["action"] == "handoff_to_tail_triage"
+    assert "handoff target tail_triage object found" in verdict["reason"]
     assert not integration.UNFINISHED_NO_ACTION_TRACE.exists()
 
     block = integration._build_unfinished_block()
-    assert "Empty-unfinished routing contract" in block
-    assert "route: tail_triage" in block
+    assert "Empty-unfinished handoff contract" in block
+    assert "handoff_to: tail_triage" in block
     assert "rename open tails into traces" in block
     assert str(integration.TAIL_TRIAGE_PROTOCOL) in block
 
@@ -648,6 +721,36 @@ def test_curiosity_open_question_adds_bounded_contract(monkeypatch, tmp_path):
     assert "completion_bookkeeping" in block
     assert "complete-curiosity-question.mjs --id c1 --status resolved" in block
     assert "relationship/system rhythm" in block
+
+
+def test_curiosity_skips_deferred_question_and_uses_next_open_question(monkeypatch, tmp_path):
+    integration = _patch_curiosity_paths(
+        monkeypatch,
+        tmp_path,
+        [
+            {
+                "id": "c2",
+                "text": "Какой должна быть живая рабочая память Сэйра?",
+                "status": "open",
+                "not_touch_until": "2999-05-20T00:00:00+03:00",
+            },
+            {
+                "id": "c3",
+                "text": "Как постепенно систематизировать размышления Сэйра?",
+                "status": "open",
+                "mode": "sayr_thoughts_consolidation",
+            },
+        ],
+    )
+
+    verdict = integration._curiosity_preflight(record_trace=True)
+    assert verdict["action"] == "bounded_curiosity_reflection"
+    assert verdict["object"]["id"] == "c3"
+
+    block = integration._build_curiosity_block()
+    assert "curiosity question `c3`" in block
+    assert "sayr_thoughts_consolidation" in block
+    assert "curiosity question `c2`" not in block
 
 
 def test_curiosity_skips_resolved_questions(monkeypatch, tmp_path):

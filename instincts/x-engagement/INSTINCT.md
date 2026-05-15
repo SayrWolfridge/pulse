@@ -2,7 +2,7 @@
 name: x-engagement
 description: Review recent social context and prepare lightweight X engagement ideas
 version: "1.0"
-enabled: true
+enabled: false
 
 triggers:
   drives:

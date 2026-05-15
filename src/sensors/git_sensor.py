@@ -33,7 +33,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pulse.src.core.config import PulseConfig
 from pulse.src.sensors.manager import BaseSensor
@@ -63,6 +63,7 @@ class GitSensor(BaseSensor):
         self.config = config
         self.git_cfg = config.sensors.git
         self._repo_states: Dict[str, _RepoState] = {}
+        self._repo_meta: Dict[str, Dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -77,10 +78,17 @@ class GitSensor(BaseSensor):
 
         valid = []
         for raw in self.git_cfg.repos:
-            p = Path(raw).expanduser().resolve()
+            repo_cfg = raw if isinstance(raw, dict) else {"path": raw}
+            repo_path = repo_cfg.get("path")
+            if not isinstance(repo_path, str) or not repo_path.strip():
+                logger.warning("Git sensor: invalid repo config (missing path): %s", raw)
+                continue
+            p = Path(repo_path).expanduser().resolve()
             if p.is_dir():
-                valid.append(str(p))
-                self._repo_states[str(p)] = _RepoState()
+                path_str = str(p)
+                valid.append(path_str)
+                self._repo_states[path_str] = _RepoState()
+                self._repo_meta[path_str] = repo_cfg
             else:
                 logger.warning("Git sensor: repo path does not exist: %s", raw)
 
@@ -213,8 +221,11 @@ class GitSensor(BaseSensor):
             state.last_commit_ts = commit_epoch
             last_commit_minutes_ago = round((now - commit_epoch) / 60, 1)
 
+        repo_meta = self._repo_meta.get(repo_path, {})
         return {
             "path": repo_path,
+            "name": repo_meta.get("name"),
+            "drives": repo_meta.get("drives", []),
             "uncommitted_changes": uncommitted_changes,
             "untracked_files": untracked_files,
             "commits_ahead": commits_ahead,
