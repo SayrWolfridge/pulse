@@ -47,10 +47,21 @@ class DefaultIntegration(Integration):
         elif decision.sensor_context:
             parts.append(f"Suggested focus: {decision.sensor_context}")
 
-        parts.append(
-            "Check if there's something worth doing for this drive. "
-            "If сейчас не время, ресурса нет, or the drive-specific block says no visible action is needed — "
-            "briefly tell Lisa what you reviewed/did and why you are stopping; do not invent work."
-        )
+        if decision.top_drive and decision.top_drive.name == "obsidian_git":
+            parts.append(
+                "Drive contract: obsidian_git. "
+                "Default autonomous action is to bring the Obsidian vault to a clean git state: "
+                "find the vault/repo_path, run git status, inspect enough to catch secrets/deletes/out-of-vault weirdness, "
+                "run git diff --check for text changes, then commit safe Obsidian note/artifact changes "
+                "(fast path: git add -A && git commit -m \"Sync Obsidian notes\" && git status --short). "
+                "Do not stop with an uncertainty report just because the change is personal/diary; Obsidian notes are expected to be committed locally. "
+                "Ask Lisa only for a real blocker: secrets, suspicious deletion/data loss, wrong repo, or external push/publish."
+            )
+        else:
+            parts.append(
+                "Check if there's something worth doing for this drive. "
+                "If сейчас не время, ресурса нет, or the drive-specific block says no visible action is needed — "
+                "briefly tell Lisa what you reviewed/did and why you are stopping; do not invent work."
+            )
 
         return "\n".join(parts)
