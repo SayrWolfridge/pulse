@@ -126,6 +126,12 @@ class DriveEngine:
 
         # Base pressure accumulation (time-based)
         for drive in self.drives.values():
+            # Git drives are sensor/event driven: clean repos must not slowly build
+            # pressure just because time passed, or they can wake the agent with no
+            # actionable git work. Their pressure is raised/cleared from the Git
+            # sensor snapshot in _apply_sensor_spikes().
+            if self._is_git_drive(drive.name):
+                continue
             drive.tick(
                 dt=dt,
                 rate=self.config.drives.pressure_rate,
@@ -174,16 +180,22 @@ class DriveEngine:
                     repo.get("uncommitted_changes", 0) > 0
                     or repo.get("untracked_files", 0) > 0
                 )
+            stale_push = bool(repo.get("stale_push"))
+            repo_has_git_pressure = bool(dirty_for_pressure or stale_push)
             if dirty_for_pressure:
                 for drive_name in repo.get("drives", []) or []:
                     if drive_name in self.drives:
                         self.drives[drive_name].spike(0.15, self.config.drives.max_pressure)
                         routed_git_spike = True
-            if repo.get("stale_push"):
+            if stale_push:
                 for drive_name in repo.get("drives", []) or []:
                     if drive_name in self.drives:
                         self.drives[drive_name].spike(0.2, self.config.drives.max_pressure)
                         routed_git_spike = True
+            if not repo_has_git_pressure:
+                for drive_name in repo.get("drives", []) or []:
+                    if drive_name in self.drives and self._is_git_drive(drive_name):
+                        self.drives[drive_name].pressure = 0.0
             if repo.get("commits_behind", 0) > 0 and "growth" in self.drives:
                 self.drives["growth"].spike(0.1, self.config.drives.max_pressure)
 
@@ -252,6 +264,11 @@ class DriveEngine:
             logger.debug(
                 f"Logos stale-task spike: {logos_data.get('logos.stale_count', 0)} stale → goals +{weighted_stale:.2f}"
             )
+
+    @staticmethod
+    def _is_git_drive(drive_name: str) -> bool:
+        """Return True for repo-local git hygiene drives."""
+        return drive_name.endswith("_git")
 
     def _read_cached_json(self, path: Path) -> tuple[Optional[dict], bool]:
         """Read a JSON file with mtime caching. Returns (data, changed) tuple.

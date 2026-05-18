@@ -634,6 +634,60 @@ class TestDriveEngineIntegration:
         engine._apply_sensor_spikes(sensor_data)
         assert engine.drives["workspace_git"].pressure == initial_workspace
 
+    def test_git_drive_does_not_accumulate_time_pressure(self):
+        """Repo-local git drives are event driven, not time-accumulating."""
+        engine = self._make_engine()
+        engine.drives["pulse_git"] = Drive(name="pulse_git", category="pulse_git", weight=1.0)
+        engine.last_tick_time -= 3600
+
+        engine.tick({"git": {"repos": []}})
+
+        assert engine.drives["pulse_git"].pressure == 0.0
+
+    def test_clean_repo_clears_stale_git_pressure(self):
+        """A clean repo snapshot discharges old git pressure for that repo."""
+        engine = self._make_engine()
+        engine.drives["pulse_git"] = Drive(name="pulse_git", category="pulse_git", pressure=3.0, weight=1.0)
+
+        sensor_data = {
+            "git": {
+                "repos": [
+                    {
+                        "drives": ["pulse_git"],
+                        "pressure_dirty": False,
+                        "stale_push": False,
+                        "commits_behind": 0,
+                    }
+                ],
+            }
+        }
+
+        engine._apply_sensor_spikes(sensor_data)
+
+        assert engine.drives["pulse_git"].pressure == 0.0
+
+    def test_dirty_repo_preserves_and_spikes_git_pressure(self):
+        """Dirty repo snapshots still raise the declared git drive."""
+        engine = self._make_engine()
+        engine.drives["pulse_git"] = Drive(name="pulse_git", category="pulse_git", pressure=0.2, weight=1.0)
+
+        sensor_data = {
+            "git": {
+                "repos": [
+                    {
+                        "drives": ["pulse_git"],
+                        "pressure_dirty": True,
+                        "stale_push": False,
+                        "commits_behind": 0,
+                    }
+                ],
+            }
+        }
+
+        engine._apply_sensor_spikes(sensor_data)
+
+        assert engine.drives["pulse_git"].pressure > 0.2
+
 
 # ---- Sensor manager registration ----
 
