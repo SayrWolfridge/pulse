@@ -47,15 +47,18 @@ class DefaultIntegration(Integration):
         elif decision.sensor_context:
             parts.append(f"Suggested focus: {decision.sensor_context}")
 
-        if decision.top_drive and decision.top_drive.name == "obsidian_git":
+        drive_name = decision.top_drive.name if decision.top_drive else ""
+        if drive_name.endswith("_git"):
             parts.append(
-                "Drive contract: obsidian_git. "
-                "Default autonomous action is to bring the Obsidian vault to a clean git state: "
-                "find the vault/repo_path, run git status, inspect enough to catch secrets/deletes/out-of-vault weirdness, "
-                "run git diff --check for text changes, then commit safe Obsidian note/artifact changes "
-                "(fast path: git add -A && git commit -m \"Sync Obsidian notes\" && git status --short). "
-                "Do not stop with an uncertainty report just because the change is personal/diary; Obsidian notes are expected to be committed locally. "
-                "Ask Lisa only for a real blocker: secrets, suspicious deletion/data loss, wrong repo, or external push/publish."
+                "Drive contract: git. "
+                "Default autonomous action is to bring the relevant repo to a clean local git state: "
+                "use repo_path from the Git repo contract when present; otherwise use the drive-specific repo from CORTEX/prompt context, "
+                "run git status, inspect enough to catch secrets, suspicious deletes/data loss, wrong repo, conflicts, prod/config risk, or out-of-scope files, "
+                "run the smallest meaningful gate (at least git diff --check for text changes; tests/lint only when appropriate), "
+                "then commit safe local changes with a clear message and verify git status --short. "
+                "Do not stop with an uncertainty report just because the changes are personal notes, diary, memory, docs, or already-made local work; local git sync is the point of *_git drives. "
+                "Ask Lisa only for a real blocker: secrets, suspicious deletion/data loss, wrong repo, conflicting/unclear provenance, live prod/runtime/config risk, or any push/publish/external effect. "
+                "Never push unless Lisa explicitly asks."
             )
         else:
             parts.append(
