@@ -28,7 +28,23 @@ class DefaultIntegration(Integration):
         else:
             parts.append(f"Total pressure: {decision.total_pressure:.2f}")
 
-        if decision.sensor_context:
+        git_context = None
+        if decision.top_drive:
+            git_context = decision.top_drive.source_data.get("git")
+        if git_context:
+            parts.extend([
+                "Git repo contract:",
+                f"- repo_name: {git_context.get('repo_name')}",
+                f"- repo_path: {git_context.get('repo_path')}",
+                f"- drive: {decision.top_drive.name}",
+                f"- reason: {', '.join(git_context.get('reasons') or [])}",
+                f"- dirty: {git_context.get('pressure_dirty')}",
+                f"- stale_push: {git_context.get('stale_push')}",
+                f"- commits_ahead: {git_context.get('commits_ahead')}",
+                f"- commits_behind: {git_context.get('commits_behind')}",
+                "Use repo_path for git checks; do not infer the repository from the drive name.",
+            ])
+        elif decision.sensor_context:
             parts.append(f"Suggested focus: {decision.sensor_context}")
 
         parts.append(

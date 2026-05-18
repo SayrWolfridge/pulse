@@ -5,6 +5,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from pulse.src.integrations.sayr.git_pulse import analyze_git_drive
+
 
 def _try_complete_emotions_if_needed() -> None:
     """Preflight страховка: если emotions-cycle завис в состоянии "не completed",
@@ -186,6 +188,20 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
                 "feedback": feedback,
             }
 
+        git_action = analyze_git_drive(decision)
+        if git_action and git_action.kind == "clean":
+            return {
+                "reason": "git preflight: clean repo",
+                "feedback": {
+                    "drives_addressed": [decision.top_drive.name],
+                    "outcome": "success",
+                    "summary": git_action.headline,
+                    "decay_overrides": {
+                        decision.top_drive.name: float(getattr(decision.top_drive, "pressure", 0.0) or 0.0)
+                    },
+                },
+            }
+
         return None
 
     def build_trigger_message(self, decision, config) -> str:
@@ -222,6 +238,10 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
             if not block:
                 return base
             return f"{base}\n\nCURIOSITY CONTRACT\n{block}"
+
+        git_action = analyze_git_drive(decision)
+        if git_action:
+            return f"{base}\n\n{git_action.as_message()}"
 
         return base
 

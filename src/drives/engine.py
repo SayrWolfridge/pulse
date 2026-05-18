@@ -152,6 +152,45 @@ class DriveEngine:
         Separated from tick() to isolate I/O from state transitions."""
         self._refresh_sources()
 
+    @staticmethod
+    def _git_drive_context(repo: dict, *, dirty_for_pressure: bool, stale_push: bool) -> dict:
+        """Build the explicit contract an agent receives for repo-local git drives."""
+        reasons = []
+        if dirty_for_pressure:
+            reasons.append("dirty_worktree")
+        if stale_push:
+            reasons.append("stale_push")
+        if not reasons:
+            reasons.append("clean")
+
+        context = {
+            "repo_name": repo.get("name"),
+            "repo_path": repo.get("path"),
+            "drives": repo.get("drives", []) or [],
+            "reasons": reasons,
+            "pressure_dirty": dirty_for_pressure,
+            "stale_push": stale_push,
+            "uncommitted_changes": repo.get("uncommitted_changes", 0),
+            "untracked_files": repo.get("untracked_files", 0),
+            "pressure_uncommitted_changes": repo.get("pressure_uncommitted_changes", 0),
+            "pressure_untracked_files": repo.get("pressure_untracked_files", 0),
+            "ignored_pressure_files": repo.get("ignored_pressure_files", 0),
+            "commits_ahead": repo.get("commits_ahead", 0),
+            "commits_behind": repo.get("commits_behind", 0),
+            "last_commit_minutes_ago": repo.get("last_commit_minutes_ago"),
+        }
+        reason_text = "+".join(reasons)
+        context["summary"] = (
+            f"Git repo contract: drive(s)={','.join(context['drives']) or '?'}; "
+            f"repo_name={context['repo_name'] or '?'}; repo_path={context['repo_path'] or '?'}; "
+            f"reason={reason_text}; dirty={dirty_for_pressure}; stale_push={stale_push}; "
+            f"ahead={context['commits_ahead']}; behind={context['commits_behind']}; "
+            f"pressure_changes={context['pressure_uncommitted_changes']}; "
+            f"pressure_untracked={context['pressure_untracked_files']}. "
+            "Use this repo_path for all git checks; do not infer the repository from the drive name."
+        )
+        return context
+
     def _apply_sensor_spikes(self, sensor_data: dict):
         """Apply pressure spikes from sensor events."""
         # File changes → goal/curiosity drives
@@ -182,20 +221,28 @@ class DriveEngine:
                 )
             stale_push = bool(repo.get("stale_push"))
             repo_has_git_pressure = bool(dirty_for_pressure or stale_push)
+            repo_drives = repo.get("drives", []) or []
+            git_context = self._git_drive_context(repo, dirty_for_pressure=bool(dirty_for_pressure), stale_push=stale_push)
             if dirty_for_pressure:
-                for drive_name in repo.get("drives", []) or []:
+                for drive_name in repo_drives:
                     if drive_name in self.drives:
                         self.drives[drive_name].spike(0.15, self.config.drives.max_pressure)
+                        self.drives[drive_name].source_data["git"] = git_context
+                        self.drives[drive_name].source_data["message"] = git_context["summary"]
                         routed_git_spike = True
             if stale_push:
-                for drive_name in repo.get("drives", []) or []:
+                for drive_name in repo_drives:
                     if drive_name in self.drives:
                         self.drives[drive_name].spike(0.2, self.config.drives.max_pressure)
+                        self.drives[drive_name].source_data["git"] = git_context
+                        self.drives[drive_name].source_data["message"] = git_context["summary"]
                         routed_git_spike = True
             if not repo_has_git_pressure:
-                for drive_name in repo.get("drives", []) or []:
+                for drive_name in repo_drives:
                     if drive_name in self.drives and self._is_git_drive(drive_name):
                         self.drives[drive_name].pressure = 0.0
+                        self.drives[drive_name].source_data.pop("git", None)
+                        self.drives[drive_name].source_data.pop("message", None)
             if repo.get("commits_behind", 0) > 0 and "growth" in self.drives:
                 self.drives["growth"].spike(0.1, self.config.drives.max_pressure)
 

@@ -688,6 +688,36 @@ class TestDriveEngineIntegration:
 
         assert engine.drives["pulse_git"].pressure > 0.2
 
+    def test_git_drive_source_data_carries_repo_contract(self):
+        """Repo-local git drives expose the exact repo contract for trigger messages."""
+        engine = self._make_engine()
+        engine.drives["pulse_git"] = Drive(name="pulse_git", category="pulse_git", pressure=0.2, weight=1.0)
+
+        sensor_data = {
+            "git": {
+                "repos": [
+                    {
+                        "path": "/home/lisa/addons/pulse",
+                        "name": "pulse",
+                        "drives": ["pulse_git"],
+                        "pressure_dirty": False,
+                        "stale_push": True,
+                        "commits_ahead": 16,
+                        "commits_behind": 0,
+                    }
+                ],
+            }
+        }
+
+        engine._apply_sensor_spikes(sensor_data)
+
+        git_context = engine.drives["pulse_git"].source_data["git"]
+        assert git_context["repo_name"] == "pulse"
+        assert git_context["repo_path"] == "/home/lisa/addons/pulse"
+        assert git_context["reasons"] == ["stale_push"]
+        assert git_context["commits_ahead"] == 16
+        assert "Use this repo_path" in engine.drives["pulse_git"].source_data["message"]
+
 
 # ---- Sensor manager registration ----
 
