@@ -28,7 +28,9 @@ Config (pulse.yaml):
       request_timeout: 10             # per-subprocess timeout (seconds)
 """
 
+import ast
 import asyncio
+import fnmatch
 import logging
 import time
 from dataclasses import dataclass, field
@@ -121,6 +123,9 @@ class GitSensor(BaseSensor):
         # Aggregate across repos (any positive → surface it)
         total_uncommitted = sum(r["uncommitted_changes"] for r in repo_results)
         total_untracked   = sum(r["untracked_files"] for r in repo_results)
+        total_pressure_uncommitted = sum(r.get("pressure_uncommitted_changes", r["uncommitted_changes"]) for r in repo_results)
+        total_pressure_untracked = sum(r.get("pressure_untracked_files", r["untracked_files"]) for r in repo_results)
+        total_ignored_pressure = sum(r.get("ignored_pressure_files", 0) for r in repo_results)
         total_ahead       = sum(r["commits_ahead"] for r in repo_results)
         total_behind      = sum(r["commits_behind"] for r in repo_results)
         any_stale_push    = any(r["stale_push"] for r in repo_results)
@@ -134,6 +139,10 @@ class GitSensor(BaseSensor):
             "repos": repo_results,
             "uncommitted_changes": total_uncommitted > 0,
             "untracked_files": total_untracked,
+            "pressure_uncommitted_changes": total_pressure_uncommitted,
+            "pressure_untracked_files": total_pressure_untracked,
+            "ignored_pressure_files": total_ignored_pressure,
+            "pressure_dirty": (total_pressure_uncommitted + total_pressure_untracked) > 0,
             "commits_ahead": total_ahead,
             "commits_behind": total_behind,
             "stale_push": any_stale_push,
@@ -168,17 +177,30 @@ class GitSensor(BaseSensor):
             return self._empty_repo_result(repo_path)
 
         # --- Uncommitted changes (staged + unstaged) ---
-        status_out = await self._run_git(["status", "--porcelain"], repo_path)
+        # Use -z so paths with non-ASCII/spaces are not C-quoted; tests and older
+        # mocks may still return newline-delimited porcelain, so the parser handles both.
+        status_out = await self._run_git(["status", "--porcelain=v1", "-z"], repo_path)
+        repo_meta = self._repo_meta.get(repo_path, {})
+        status_entries = self._parse_status_output(status_out or "")
+        ignore_pressure_patterns = self._ignore_pressure_patterns(repo_meta)
         uncommitted_changes = 0
         untracked_files = 0
-        if status_out is not None:
-            for line in status_out.strip().splitlines():
-                if not line:
-                    continue
-                if line.startswith("??"):
-                    untracked_files += 1
-                else:
-                    uncommitted_changes += 1
+        pressure_uncommitted_changes = 0
+        pressure_untracked_files = 0
+        ignored_pressure_files = 0
+        for entry in status_entries:
+            if entry["untracked"]:
+                untracked_files += 1
+            else:
+                uncommitted_changes += 1
+
+            if self._matches_any(entry["path"], ignore_pressure_patterns):
+                ignored_pressure_files += 1
+                continue
+            if entry["untracked"]:
+                pressure_untracked_files += 1
+            else:
+                pressure_uncommitted_changes += 1
 
         # --- Commits ahead/behind remote ---
         commits_ahead = 0
@@ -221,18 +243,65 @@ class GitSensor(BaseSensor):
             state.last_commit_ts = commit_epoch
             last_commit_minutes_ago = round((now - commit_epoch) / 60, 1)
 
-        repo_meta = self._repo_meta.get(repo_path, {})
         return {
             "path": repo_path,
             "name": repo_meta.get("name"),
             "drives": repo_meta.get("drives", []),
             "uncommitted_changes": uncommitted_changes,
             "untracked_files": untracked_files,
+            "pressure_uncommitted_changes": pressure_uncommitted_changes,
+            "pressure_untracked_files": pressure_untracked_files,
+            "ignored_pressure_files": ignored_pressure_files,
+            "pressure_dirty": (pressure_uncommitted_changes + pressure_untracked_files) > 0,
             "commits_ahead": commits_ahead,
             "commits_behind": commits_behind,
             "stale_push": stale_push,
             "last_commit_minutes_ago": last_commit_minutes_ago,
         }
+
+    @staticmethod
+    def _parse_status_output(status_out: str) -> List[dict]:
+        """Parse git porcelain v1 status into {path, untracked} entries."""
+        if not status_out:
+            return []
+        raw_entries = status_out.split("\0") if "\0" in status_out else status_out.splitlines()
+        entries: List[dict] = []
+        skip_next = False
+        for raw in raw_entries:
+            if skip_next:
+                skip_next = False
+                continue
+            if not raw:
+                continue
+            if len(raw) < 3:
+                continue
+            status = raw[:2]
+            path = raw[3:]
+            # Porcelain -z encodes renames as one entry followed by the original path.
+            if "\0" in status_out and status[0] in {"R", "C"}:
+                skip_next = True
+            if " -> " in path:
+                path = path.split(" -> ", 1)[1]
+            if path.startswith('"') and path.endswith('"'):
+                try:
+                    path = ast.literal_eval(path)
+                except Exception:
+                    path = path.strip('"')
+            entries.append({"path": path, "untracked": status == "??"})
+        return entries
+
+    @staticmethod
+    def _ignore_pressure_patterns(repo_meta: Dict[str, Any]) -> List[str]:
+        patterns = list(repo_meta.get("ignore_pressure_patterns") or [])
+        # Sayr thoughts are generated often and are handled by slower memory hygiene;
+        # by themselves they should not wake workspace_git every Pulse tick.
+        if repo_meta.get("name") == "workspace":
+            patterns.append("memory/sayr-thoughts/**")
+        return patterns
+
+    @staticmethod
+    def _matches_any(path: str, patterns: List[str]) -> bool:
+        return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
 
     # ------------------------------------------------------------------
     # git subprocess helper
@@ -274,6 +343,10 @@ class GitSensor(BaseSensor):
             "repos": [],
             "uncommitted_changes": False,
             "untracked_files": 0,
+            "pressure_uncommitted_changes": 0,
+            "pressure_untracked_files": 0,
+            "ignored_pressure_files": 0,
+            "pressure_dirty": False,
             "commits_ahead": 0,
             "commits_behind": 0,
             "stale_push": False,
@@ -287,6 +360,10 @@ class GitSensor(BaseSensor):
             "path": path,
             "uncommitted_changes": 0,
             "untracked_files": 0,
+            "pressure_uncommitted_changes": 0,
+            "pressure_untracked_files": 0,
+            "ignored_pressure_files": 0,
+            "pressure_dirty": False,
             "commits_ahead": 0,
             "commits_behind": 0,
             "stale_push": False,

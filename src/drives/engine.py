@@ -163,18 +163,41 @@ class DriveEngine:
             if "social" in self.drives:
                 self.drives["social"].spike(0.1, self.config.drives.max_pressure)
 
-        # Git: uncommitted changes or stale push → goals drive
+        # Git: route repo-local dirtiness to the drives declared for that repo
+        # (e.g. workspace_git vs obsidian_git) instead of the old generic goals drive.
         git_data = sensor_data.get("git", {})
-        if git_data.get("uncommitted_changes") or git_data.get("untracked_files", 0) > 0:
-            if "goals" in self.drives:
-                self.drives["goals"].spike(0.15, self.config.drives.max_pressure)
-        if git_data.get("stale_push"):
-            if "goals" in self.drives:
-                self.drives["goals"].spike(0.2, self.config.drives.max_pressure)
-        # Git: remote has updates we haven't pulled → growth drive
-        if git_data.get("commits_behind", 0) > 0:
-            if "growth" in self.drives:
+        routed_git_spike = False
+        for repo in git_data.get("repos", []) or []:
+            dirty_for_pressure = repo.get("pressure_dirty")
+            if dirty_for_pressure is None:
+                dirty_for_pressure = (
+                    repo.get("uncommitted_changes", 0) > 0
+                    or repo.get("untracked_files", 0) > 0
+                )
+            if dirty_for_pressure:
+                for drive_name in repo.get("drives", []) or []:
+                    if drive_name in self.drives:
+                        self.drives[drive_name].spike(0.15, self.config.drives.max_pressure)
+                        routed_git_spike = True
+            if repo.get("stale_push"):
+                for drive_name in repo.get("drives", []) or []:
+                    if drive_name in self.drives:
+                        self.drives[drive_name].spike(0.2, self.config.drives.max_pressure)
+                        routed_git_spike = True
+            if repo.get("commits_behind", 0) > 0 and "growth" in self.drives:
                 self.drives["growth"].spike(0.1, self.config.drives.max_pressure)
+
+        # Backward compatibility for tests/older sensors without per-repo data.
+        if not routed_git_spike and not git_data.get("repos"):
+            if git_data.get("pressure_dirty") or git_data.get("uncommitted_changes") or git_data.get("untracked_files", 0) > 0:
+                if "goals" in self.drives:
+                    self.drives["goals"].spike(0.15, self.config.drives.max_pressure)
+            if git_data.get("stale_push"):
+                if "goals" in self.drives:
+                    self.drives["goals"].spike(0.2, self.config.drives.max_pressure)
+            if git_data.get("commits_behind", 0) > 0:
+                if "growth" in self.drives:
+                    self.drives["growth"].spike(0.1, self.config.drives.max_pressure)
 
         # Web: new RSS/Atom content found → curiosity drive
         if sensor_data.get("web", {}).get("new_content"):

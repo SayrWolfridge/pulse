@@ -206,6 +206,37 @@ class TestReadDirty:
         assert result["uncommitted_changes"] is True  # the modified file
         assert result["untracked_files"] == 2
 
+    @pytest.mark.asyncio
+    async def test_workspace_sayr_thoughts_do_not_count_for_pressure(self, tmp_path):
+        """Generated Sayr thoughts remain visible but do not wake workspace_git."""
+        config = PulseConfig()
+        repo_dir = tmp_path / "workspace"
+        repo_dir.mkdir()
+        config.sensors.git = GitSensorConfig(
+            enabled=True,
+            repos=[{"path": str(repo_dir), "name": "workspace", "drives": ["workspace_git"]}],
+        )
+        sensor = GitSensor(config)
+        repo_path = str(repo_dir.resolve())
+        sensor._repo_states[repo_path] = _RepoState()
+        sensor._repo_meta[repo_path] = config.sensors.git.repos[0]
+
+        mock_fn = make_run_git_mock({
+            "status": "?? memory/sayr-thoughts/quiet.md\n",
+            "rev-list": "0\t0",
+            "log": str(int(time.time())),
+        })
+        with patch.object(sensor, "_run_git", side_effect=mock_fn):
+            result = await sensor.read()
+
+        repo = result["repos"][0]
+        assert repo["untracked_files"] == 1
+        assert repo["ignored_pressure_files"] == 1
+        assert repo["pressure_untracked_files"] == 0
+        assert repo["pressure_dirty"] is False
+        assert result["untracked_files"] == 1
+        assert result["pressure_dirty"] is False
+
 
 # ---- Read: ahead/behind ----
 
@@ -459,6 +490,9 @@ class TestMultiRepo:
         # repo1: 1 untracked, repo2: 1 modified
         assert result["untracked_files"] == 1
         assert result["uncommitted_changes"] is True  # repo2 has modified
+        assert result["pressure_untracked_files"] == 1
+        assert result["pressure_uncommitted_changes"] == 1
+        assert result["pressure_dirty"] is True
         assert result["commits_ahead"] == 1  # repo1
         assert result["commits_behind"] == 2  # repo2
 
@@ -539,7 +573,7 @@ class TestDriveEngineIntegration:
         assert engine.drives["growth"].pressure > initial_growth
 
     def test_untracked_files_spike_goals(self):
-        """Untracked files also spike goals drive."""
+        """Untracked files also spike goals drive for legacy aggregate sensor data."""
         engine = self._make_engine()
         initial = engine.drives["goals"].pressure
 
@@ -553,6 +587,52 @@ class TestDriveEngineIntegration:
         }
         engine._apply_sensor_spikes(sensor_data)
         assert engine.drives["goals"].pressure > initial
+
+    def test_repo_specific_dirty_spikes_declared_drive(self):
+        """Per-repo git dirtiness feeds the repo's declared drive."""
+        engine = self._make_engine()
+        engine.drives["workspace_git"] = Drive(name="workspace_git", category="workspace_git", weight=1.0)
+        initial_workspace = engine.drives["workspace_git"].pressure
+        initial_goals = engine.drives["goals"].pressure
+
+        sensor_data = {
+            "git": {
+                "repos": [
+                    {
+                        "drives": ["workspace_git"],
+                        "pressure_dirty": True,
+                        "stale_push": False,
+                        "commits_behind": 0,
+                    }
+                ],
+            }
+        }
+        engine._apply_sensor_spikes(sensor_data)
+        assert engine.drives["workspace_git"].pressure > initial_workspace
+        assert engine.drives["goals"].pressure == initial_goals
+
+    def test_repo_ignored_pressure_does_not_spike_declared_drive(self):
+        """Repos dirty only in ignored files do not wake their git drive."""
+        engine = self._make_engine()
+        engine.drives["workspace_git"] = Drive(name="workspace_git", category="workspace_git", weight=1.0)
+        initial_workspace = engine.drives["workspace_git"].pressure
+
+        sensor_data = {
+            "git": {
+                "repos": [
+                    {
+                        "drives": ["workspace_git"],
+                        "pressure_dirty": False,
+                        "untracked_files": 1,
+                        "ignored_pressure_files": 1,
+                        "stale_push": False,
+                        "commits_behind": 0,
+                    }
+                ],
+            }
+        }
+        engine._apply_sensor_spikes(sensor_data)
+        assert engine.drives["workspace_git"].pressure == initial_workspace
 
 
 # ---- Sensor manager registration ----
