@@ -320,8 +320,12 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
             lines.append("- Вечерний слепок дня ещё не закрыт")
 
         if not lines:
-            missing_human = data.get("missing_human") or []
-            lines.extend(f"- {item}" for item in missing_human[:3])
+            # Early-morning empty daily files are normal for Lisa's rhythm.
+            # If a fresh daily note exists before the day has really started,
+            # do not turn its empty template fields into a health nudge.
+            if after(10):
+                missing_human = data.get("missing_human") or []
+                lines.extend(f"- {item}" for item in missing_human[:3])
 
         return "\n".join(lines)
 
