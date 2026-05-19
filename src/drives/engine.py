@@ -226,16 +226,34 @@ class DriveEngine:
             if dirty_for_pressure:
                 for drive_name in repo_drives:
                     if drive_name in self.drives:
-                        self.drives[drive_name].spike(0.15, self.config.drives.max_pressure)
-                        self.drives[drive_name].source_data["git"] = git_context
-                        self.drives[drive_name].source_data["message"] = git_context["summary"]
+                        drive = self.drives[drive_name]
+                        since_addressed = time.time() - drive.last_addressed
+                        cooldown = getattr(self.config.openclaw, "min_trigger_interval", 300)
+                        if drive.last_addressed <= 0 or since_addressed > cooldown:
+                            drive.spike(0.15, self.config.drives.max_pressure)
+                        else:
+                            logger.debug(
+                                f"Git dirty spike suppressed for {drive_name} "
+                                f"(addressed {since_addressed:.0f}s ago, pressure={drive.pressure:.2f})"
+                            )
+                        drive.source_data["git"] = git_context
+                        drive.source_data["message"] = git_context["summary"]
                         routed_git_spike = True
             if stale_push:
                 for drive_name in repo_drives:
                     if drive_name in self.drives:
-                        self.drives[drive_name].spike(0.2, self.config.drives.max_pressure)
-                        self.drives[drive_name].source_data["git"] = git_context
-                        self.drives[drive_name].source_data["message"] = git_context["summary"]
+                        drive = self.drives[drive_name]
+                        since_addressed = time.time() - drive.last_addressed
+                        cooldown = getattr(self.config.openclaw, "min_trigger_interval", 300)
+                        if drive.last_addressed <= 0 or since_addressed > cooldown:
+                            drive.spike(0.2, self.config.drives.max_pressure)
+                        else:
+                            logger.debug(
+                                f"Git stale-push spike suppressed for {drive_name} "
+                                f"(addressed {since_addressed:.0f}s ago, pressure={drive.pressure:.2f})"
+                            )
+                        drive.source_data["git"] = git_context
+                        drive.source_data["message"] = git_context["summary"]
                         routed_git_spike = True
             if not repo_has_git_pressure:
                 for drive_name in repo_drives:

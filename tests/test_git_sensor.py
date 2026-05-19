@@ -688,6 +688,35 @@ class TestDriveEngineIntegration:
 
         assert engine.drives["pulse_git"].pressure > 0.2
 
+    def test_recently_addressed_dirty_git_drive_does_not_respike(self):
+        """Entering a git-drive task should discharge the alarm for a cooldown window."""
+        engine = self._make_engine()
+        engine.drives["pulse_git"] = Drive(
+            name="pulse_git",
+            category="pulse_git",
+            pressure=0.0,
+            weight=1.0,
+            last_addressed=time.time(),
+        )
+
+        sensor_data = {
+            "git": {
+                "repos": [
+                    {
+                        "drives": ["pulse_git"],
+                        "pressure_dirty": True,
+                        "stale_push": False,
+                        "commits_behind": 0,
+                    }
+                ],
+            }
+        }
+
+        engine._apply_sensor_spikes(sensor_data)
+
+        assert engine.drives["pulse_git"].pressure == 0.0
+        assert "git" in engine.drives["pulse_git"].source_data
+
     def test_git_drive_source_data_carries_repo_contract(self):
         """Repo-local git drives expose the exact repo contract for trigger messages."""
         engine = self._make_engine()
