@@ -18,20 +18,26 @@ class GitPulseAction:
     behind: int
 
     def as_message(self) -> str:
+        repo_path = self.repo_path or "<missing repo_path>"
         lines = [
             "GIT ACTION",
             f"- kind: {self.kind}",
             f"- repo_name: {self.repo_name}",
-            f"- repo_path: {self.repo_path}",
+            f"- repo_path: {repo_path}",
             f"- headline: {self.headline}",
         ]
+        if self.kind == "commit_needed":
+            lines.extend([
+                "- required_action: commit_this_repo",
+                f"- target_repo: {repo_path}",
+            ])
         if self.dirty_files:
             lines.append("- files:")
             lines.extend(f"  - {path}" for path in self.dirty_files)
         if self.details:
             lines.append("- details:")
             lines.extend(f"  - {detail}" for detail in self.details)
-        lines.append("Use repo_path. Do not inspect another repository for this git drive.")
+        lines.append("Use repo_path as the target repository for this git action.")
         return "\n".join(lines)
 
 
@@ -107,8 +113,14 @@ def analyze_git_drive(decision: Any) -> GitPulseAction | None:
             kind="commit_needed",
             repo_name=context.get("repo_name"),
             repo_path=str(repo_path),
-            headline="НАДО ЗАКОММИТИТЬ ВОТ ЭТО",
-            details=["Review diff, run the narrow relevant test, then make a local commit"],
+            headline="ЗАКОММИТЬ ВОТ ЭТО РЕПО",
+            details=[
+                f"Work in {repo_path}.",
+                f"Run git -C {repo_path} status --short.",
+                f"Review git -C {repo_path} diff.",
+                f"If safe, stage and commit local changes in {repo_path}.",
+                f"Verify git -C {repo_path} status --short after commit.",
+            ],
             dirty_files=dirty_files,
             ahead=ahead,
             behind=behind,

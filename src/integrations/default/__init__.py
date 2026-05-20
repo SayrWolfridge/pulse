@@ -5,7 +5,39 @@ Sends a simple trigger message with drive info. No assumptions about
 CORTEX.md, hippocampus, or any specific agent architecture.
 """
 
+from pathlib import Path
+import re
+
 from pulse.src.integrations import Integration
+
+
+CORTEX_PULSE_PATH = Path("/home/lisa/.openclaw/workspace/pulse/CORTEX-pulse.md")
+
+
+def _load_drive_protocol(drive_name: str) -> str | None:
+    """Load the drive-specific protocol block from Lisa's Pulse cortex."""
+    try:
+        text = CORTEX_PULSE_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    headings = [drive_name]
+    if drive_name.endswith("_git"):
+        headings = ["*_git", drive_name]
+
+    for heading in headings:
+        pattern = re.compile(
+            rf"^##+\s+(?:\d+\.\s+)?`drive = {re.escape(heading)}`.*?(?=^---\s*$|^##+\s)",
+            re.MULTILINE | re.DOTALL,
+        )
+        match = pattern.search(text)
+        if match:
+            block = match.group(0).rstrip()
+            if heading != drive_name:
+                block = block.replace("`drive = *_git`", f"`drive = {drive_name}`")
+                block = block.replace("любого drive", f"drive `{drive_name}`")
+            return block
+    return None
 
 
 class DefaultIntegration(Integration):
@@ -48,17 +80,18 @@ class DefaultIntegration(Integration):
             parts.append(f"Suggested focus: {decision.sensor_context}")
 
         drive_name = decision.top_drive.name if decision.top_drive else ""
-        if drive_name.endswith("_git"):
+        drive_protocol = _load_drive_protocol(drive_name) if drive_name else None
+        if drive_protocol:
+            parts.extend([
+                "",
+                "Drive-specific protocol:",
+                drive_protocol,
+            ])
+        elif drive_name:
             parts.append(
-                "Drive contract: git. "
-                "Default autonomous action is to bring the relevant repo to a clean local git state: "
-                "use repo_path from the Git repo contract when present; otherwise use the drive-specific repo from CORTEX/prompt context, "
-                "run git status, inspect enough to catch secrets, suspicious deletes/data loss, wrong repo, conflicts, prod/config risk, or out-of-scope files, "
-                "run the smallest meaningful gate (at least git diff --check for text changes; tests/lint only when appropriate), "
-                "then commit safe local changes with a clear message and verify git status --short. "
-                "Do not stop with an uncertainty report just because the changes are personal notes, diary, memory, docs, or already-made local work; local git sync is the point of *_git drives. "
-                "Ask Lisa only for a real blocker: secrets, suspicious deletion/data loss, wrong repo, conflicting/unclear provenance, live prod/runtime/config risk, or any push/publish/external effect. "
-                "Never push unless Lisa explicitly asks."
+                f"Drive-specific protocol missing for {drive_name}. "
+                f"Tell Lisa in the reply: 'не подтянулась инструкция для {drive_name}, "
+                "надо поправить подтягивание, когда Лиса придёт' — and stop."
             )
         else:
             parts.append(
