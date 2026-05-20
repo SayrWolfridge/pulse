@@ -223,14 +223,33 @@ class DriveEngine:
             repo_has_git_pressure = bool(dirty_for_pressure or stale_push)
             repo_drives = repo.get("drives", []) or []
             git_context = self._git_drive_context(repo, dirty_for_pressure=bool(dirty_for_pressure), stale_push=stale_push)
+            waiting_for_user = bool(repo.get("waiting_for_user"))
+            unchanged_tail = bool(repo.get("unchanged_pressure_tail"))
+            artifact_only_tail = bool(repo.get("artifact_only_tail"))
+            regrowth_multiplier = 1.0
+            if unchanged_tail:
+                regrowth_multiplier *= getattr(
+                    self.config.sensors.git,
+                    "unchanged_tail_regrowth_multiplier",
+                    0.2,
+                )
+            if artifact_only_tail:
+                regrowth_multiplier *= getattr(
+                    self.config.sensors.git,
+                    "artifact_tail_regrowth_multiplier",
+                    0.1,
+                )
             if dirty_for_pressure:
                 for drive_name in repo_drives:
                     if drive_name in self.drives:
                         drive = self.drives[drive_name]
                         since_addressed = time.time() - drive.last_addressed
                         cooldown = getattr(self.config.openclaw, "min_trigger_interval", 300)
-                        if drive.last_addressed <= 0 or since_addressed > cooldown:
-                            drive.spike(0.15, self.config.drives.max_pressure)
+                        if waiting_for_user:
+                            cap = getattr(self.config.sensors.git, "waiting_user_pressure_cap", 0.9)
+                            drive.pressure = min(drive.pressure, cap)
+                        elif drive.last_addressed <= 0 or since_addressed > cooldown:
+                            drive.spike(0.15 * regrowth_multiplier, self.config.drives.max_pressure)
                         else:
                             logger.debug(
                                 f"Git dirty spike suppressed for {drive_name} "
@@ -245,8 +264,11 @@ class DriveEngine:
                         drive = self.drives[drive_name]
                         since_addressed = time.time() - drive.last_addressed
                         cooldown = getattr(self.config.openclaw, "min_trigger_interval", 300)
-                        if drive.last_addressed <= 0 or since_addressed > cooldown:
-                            drive.spike(0.2, self.config.drives.max_pressure)
+                        if waiting_for_user:
+                            cap = getattr(self.config.sensors.git, "waiting_user_pressure_cap", 0.9)
+                            drive.pressure = min(drive.pressure, cap)
+                        elif drive.last_addressed <= 0 or since_addressed > cooldown:
+                            drive.spike(0.2 * regrowth_multiplier, self.config.drives.max_pressure)
                         else:
                             logger.debug(
                                 f"Git stale-push spike suppressed for {drive_name} "
@@ -254,6 +276,9 @@ class DriveEngine:
                             )
                         drive.source_data["git"] = git_context
                         drive.source_data["message"] = git_context["summary"]
+                        if waiting_for_user:
+                            drive.source_data["git"]["waiting_for_user"] = True
+                            drive.source_data["git"]["waiting_reason"] = repo.get("waiting_reason")
                         routed_git_spike = True
             if not repo_has_git_pressure:
                 for drive_name in repo_drives:

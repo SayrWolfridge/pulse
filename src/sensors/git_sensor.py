@@ -48,6 +48,9 @@ class _RepoState:
     """Tracks per-repo timing for stale-push detection."""
     first_seen_ahead_ts: Optional[float] = None   # epoch when commits_ahead first noticed
     last_commit_ts: Optional[float] = None         # epoch of most recent commit
+    last_pressure_fingerprint: Optional[str] = None
+    waiting_for_user: bool = False
+    waiting_reason: Optional[str] = None
 
 
 class GitSensor(BaseSensor):
@@ -66,6 +69,10 @@ class GitSensor(BaseSensor):
         self.git_cfg = config.sensors.git
         self._repo_states: Dict[str, _RepoState] = {}
         self._repo_meta: Dict[str, Dict[str, Any]] = {}
+
+    _ARTIFACT_SUFFIXES = (
+        ".png", ".jpg", ".jpeg", ".webp", ".gif", ".zip", ".out", ".json"
+    )
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -202,6 +209,8 @@ class GitSensor(BaseSensor):
             else:
                 pressure_uncommitted_changes += 1
 
+        artifact_only_tail = self._is_artifact_only_tail(status_entries)
+
         # --- Commits ahead/behind remote ---
         commits_ahead = 0
         commits_behind = 0
@@ -233,6 +242,25 @@ class GitSensor(BaseSensor):
             state.first_seen_ahead_ts = None
             stale_push = False
 
+        pressure_fingerprint = self._pressure_fingerprint(
+            pressure_uncommitted_changes=pressure_uncommitted_changes,
+            pressure_untracked_files=pressure_untracked_files,
+            ignored_pressure_files=ignored_pressure_files,
+            commits_ahead=commits_ahead,
+            stale_push=stale_push,
+            artifact_only_tail=artifact_only_tail,
+        )
+        unchanged_pressure_tail = (
+            state.last_pressure_fingerprint == pressure_fingerprint
+            and pressure_fingerprint is not None
+        )
+        state.last_pressure_fingerprint = pressure_fingerprint
+
+        waiting_for_user = bool(repo_meta.get("waiting_for_user"))
+        waiting_reason = repo_meta.get("waiting_reason") if waiting_for_user else None
+        state.waiting_for_user = waiting_for_user
+        state.waiting_reason = waiting_reason
+
         # --- Last commit timestamp ---
         last_commit_ts_str = await self._run_git(
             ["log", "-1", "--format=%ct"], repo_path
@@ -253,6 +281,10 @@ class GitSensor(BaseSensor):
             "pressure_untracked_files": pressure_untracked_files,
             "ignored_pressure_files": ignored_pressure_files,
             "pressure_dirty": (pressure_uncommitted_changes + pressure_untracked_files) > 0,
+            "artifact_only_tail": artifact_only_tail,
+            "unchanged_pressure_tail": unchanged_pressure_tail,
+            "waiting_for_user": waiting_for_user,
+            "waiting_reason": waiting_reason,
             "commits_ahead": commits_ahead,
             "commits_behind": commits_behind,
             "stale_push": stale_push,
@@ -298,6 +330,45 @@ class GitSensor(BaseSensor):
         if repo_meta.get("name") == "workspace":
             patterns.append("memory/sayr-thoughts/**")
         return patterns
+
+    @classmethod
+    def _is_artifact_only_tail(cls, entries: List[dict]) -> bool:
+        if not entries:
+            return False
+        for entry in entries:
+            path = entry.get("path", "")
+            name = Path(path).name
+            if path.startswith("reports/") or name.startswith("tmp-"):
+                continue
+            if name.endswith(cls._ARTIFACT_SUFFIXES):
+                continue
+            return False
+        return True
+
+    @staticmethod
+    def _pressure_fingerprint(
+        *,
+        pressure_uncommitted_changes: int,
+        pressure_untracked_files: int,
+        ignored_pressure_files: int,
+        commits_ahead: int,
+        stale_push: bool,
+        artifact_only_tail: bool,
+    ) -> Optional[str]:
+        if not any([
+            pressure_uncommitted_changes,
+            pressure_untracked_files,
+            ignored_pressure_files,
+            commits_ahead,
+            stale_push,
+            artifact_only_tail,
+        ]):
+            return None
+        return (
+            f"c{pressure_uncommitted_changes}:u{pressure_untracked_files}:"
+            f"i{ignored_pressure_files}:a{commits_ahead}:s{int(stale_push)}:"
+            f"artifact{int(artifact_only_tail)}"
+        )
 
     @staticmethod
     def _matches_any(path: str, patterns: List[str]) -> bool:

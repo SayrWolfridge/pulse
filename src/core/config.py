@@ -116,6 +116,10 @@ class GitSensorConfig:
     stale_push_minutes: int = 60        # minutes ahead of remote before "stale_push" fires
     fetch_remote: bool = False          # run `git fetch` each cycle (accurate behind-check)
     request_timeout: int = 10           # per-subprocess timeout (seconds)
+    unchanged_tail_regrowth_multiplier: float = 0.2
+    artifact_tail_regrowth_multiplier: float = 0.1
+    waiting_user_cooldown_minutes: int = 180
+    waiting_user_pressure_cap: float = 0.9
 
 
 @dataclass

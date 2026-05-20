@@ -717,6 +717,53 @@ class TestDriveEngineIntegration:
         assert engine.drives["pulse_git"].pressure == 0.0
         assert "git" in engine.drives["pulse_git"].source_data
 
+    def test_waiting_for_user_caps_git_pressure(self):
+        engine = self._make_engine()
+        engine.drives["pulse_git"] = Drive(name="pulse_git", category="pulse_git", pressure=2.0, weight=1.0)
+
+        sensor_data = {
+            "git": {
+                "repos": [
+                    {
+                        "drives": ["pulse_git"],
+                        "pressure_dirty": True,
+                        "stale_push": True,
+                        "waiting_for_user": True,
+                        "waiting_reason": "push",
+                        "commits_behind": 0,
+                    }
+                ],
+            }
+        }
+
+        engine._apply_sensor_spikes(sensor_data)
+
+        assert engine.drives["pulse_git"].pressure <= 0.9
+        assert engine.drives["pulse_git"].source_data["git"]["waiting_for_user"] is True
+
+    def test_unchanged_artifact_tail_regrowth_is_suppressed(self):
+        engine = self._make_engine()
+        engine.drives["workspace_git"] = Drive(name="workspace_git", category="workspace_git", pressure=0.0, weight=1.0)
+
+        sensor_data = {
+            "git": {
+                "repos": [
+                    {
+                        "drives": ["workspace_git"],
+                        "pressure_dirty": True,
+                        "artifact_only_tail": True,
+                        "unchanged_pressure_tail": True,
+                        "stale_push": False,
+                        "commits_behind": 0,
+                    }
+                ],
+            }
+        }
+
+        engine._apply_sensor_spikes(sensor_data)
+
+        assert 0.0 < engine.drives["workspace_git"].pressure < 0.15
+
     def test_git_drive_source_data_carries_repo_contract(self):
         """Repo-local git drives expose the exact repo contract for trigger messages."""
         engine = self._make_engine()
