@@ -268,7 +268,7 @@ class DriveEngine:
                             cap = getattr(self.config.sensors.git, "waiting_user_pressure_cap", 0.9)
                             drive.pressure = min(drive.pressure, cap)
                         elif drive.last_addressed <= 0 or since_addressed > cooldown:
-                            drive.spike(0.2 * regrowth_multiplier, self.config.drives.max_pressure)
+                            drive.spike(0.05 * regrowth_multiplier, self.config.drives.max_pressure)
                         else:
                             logger.debug(
                                 f"Git stale-push spike suppressed for {drive_name} "
