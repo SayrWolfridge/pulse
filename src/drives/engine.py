@@ -592,9 +592,16 @@ class DriveEngine:
                     proportion = drive.weighted_pressure / decision.total_pressure
                     drive.decay(decay_total * proportion * 2)
 
-        # Mark top drive as addressed
+        # Mark top drive as addressed. Repo-local git drives are binary hygiene
+        # signals: after a successful git turn, either the repo is still dirty
+        # and the sensor will regrow pressure on the next tick, or it is clean.
+        # Keeping residual pressure after a clean commit makes Pulse wake again
+        # for already-closed work, so clear the addressed git drive completely.
         if decision.top_drive and decision.top_drive.name in self.drives:
-            self.drives[decision.top_drive.name].last_addressed = now
+            top_drive = self.drives[decision.top_drive.name]
+            if self._is_git_drive(top_drive.name):
+                top_drive.pressure = 0.0
+            top_drive.last_addressed = now
             logger.info(
                 f"Drives decayed after successful turn. "
                 f"Top drive '{decision.top_drive.name}' addressed."
