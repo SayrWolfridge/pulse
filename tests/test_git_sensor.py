@@ -76,6 +76,11 @@ class TestConfigParsing:
         assert config.sensors.git.stale_push_minutes == 60
         assert config.sensors.git.fetch_remote is False
         assert config.sensors.git.request_timeout == 10
+        assert config.sensors.git.dirty_pressure_spike == 0.04
+        assert config.sensors.git.stale_push_pressure_spike == 0.04
+        assert config.sensors.git.behind_pressure_spike == 0.04
+        assert config.sensors.git.unchanged_tail_regrowth_multiplier == 0.1
+        assert config.sensors.git.artifact_tail_regrowth_multiplier == 0.05
 
     def test_yaml_round_trip(self, tmp_path):
         """Config values load from YAML correctly."""
@@ -89,6 +94,13 @@ sensors:
     stale_push_minutes: 30
     fetch_remote: true
     request_timeout: 15
+    dirty_pressure_spike: 0.03
+    stale_push_pressure_spike: 0.06
+    behind_pressure_spike: 0.02
+    unchanged_tail_regrowth_multiplier: 0.25
+    artifact_tail_regrowth_multiplier: 0.15
+    waiting_user_cooldown_minutes: 240
+    waiting_user_pressure_cap: 0.7
 """
         yaml_file = tmp_path / "pulse.yaml"
         yaml_file.write_text(yaml_content)
@@ -98,6 +110,13 @@ sensors:
         assert config.sensors.git.stale_push_minutes == 30
         assert config.sensors.git.fetch_remote is True
         assert config.sensors.git.request_timeout == 15
+        assert config.sensors.git.dirty_pressure_spike == 0.03
+        assert config.sensors.git.stale_push_pressure_spike == 0.06
+        assert config.sensors.git.behind_pressure_spike == 0.02
+        assert config.sensors.git.unchanged_tail_regrowth_multiplier == 0.25
+        assert config.sensors.git.artifact_tail_regrowth_multiplier == 0.15
+        assert config.sensors.git.waiting_user_cooldown_minutes == 240
+        assert config.sensors.git.waiting_user_pressure_cap == 0.7
 
 
 # ---- Lifecycle ----
@@ -686,7 +705,7 @@ class TestDriveEngineIntegration:
 
         engine._apply_sensor_spikes(sensor_data)
 
-        assert engine.drives["pulse_git"].pressure > 0.2
+        assert engine.drives["pulse_git"].pressure == pytest.approx(0.24)
 
     def test_recently_addressed_dirty_git_drive_does_not_respike(self):
         """Entering a git-drive task should discharge the alarm for a cooldown window."""
@@ -762,7 +781,7 @@ class TestDriveEngineIntegration:
 
         engine._apply_sensor_spikes(sensor_data)
 
-        assert 0.0 < engine.drives["workspace_git"].pressure < 0.15
+        assert engine.drives["workspace_git"].pressure == pytest.approx(0.0002)
 
     def test_git_drive_source_data_carries_repo_contract(self):
         """Repo-local git drives expose the exact repo contract for trigger messages."""
@@ -822,6 +841,7 @@ class TestDriveEngineIntegration:
         assert engine.drives["pulse_git"].pressure > 0.0
         assert engine.drives["growth"].pressure == 0.0
         assert git_context["reasons"] == ["commits_behind"]
+        assert engine.drives["pulse_git"].pressure == pytest.approx(0.04)
         assert git_context["commits_behind"] == 2
         assert "reason=commits_behind" in engine.drives["pulse_git"].source_data["message"]
 

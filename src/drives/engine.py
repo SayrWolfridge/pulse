@@ -257,7 +257,8 @@ class DriveEngine:
                             cap = getattr(self.config.sensors.git, "waiting_user_pressure_cap", 0.9)
                             drive.pressure = min(drive.pressure, cap)
                         elif drive.last_addressed <= 0 or since_addressed > cooldown:
-                            drive.spike(0.15 * regrowth_multiplier, self.config.drives.max_pressure)
+                            spike = getattr(self.config.sensors.git, "dirty_pressure_spike", 0.04)
+                            drive.spike(spike * regrowth_multiplier, self.config.drives.max_pressure)
                         else:
                             logger.debug(
                                 f"Git dirty spike suppressed for {drive_name} "
@@ -276,7 +277,8 @@ class DriveEngine:
                             cap = getattr(self.config.sensors.git, "waiting_user_pressure_cap", 0.9)
                             drive.pressure = min(drive.pressure, cap)
                         elif drive.last_addressed <= 0 or since_addressed > cooldown:
-                            drive.spike(0.05 * regrowth_multiplier, self.config.drives.max_pressure)
+                            spike = getattr(self.config.sensors.git, "stale_push_pressure_spike", 0.04)
+                            drive.spike(spike * regrowth_multiplier, self.config.drives.max_pressure)
                         else:
                             logger.debug(
                                 f"Git stale-push spike suppressed for {drive_name} "
@@ -298,7 +300,8 @@ class DriveEngine:
                             cap = getattr(self.config.sensors.git, "waiting_user_pressure_cap", 0.9)
                             drive.pressure = min(drive.pressure, cap)
                         elif drive.last_addressed <= 0 or since_addressed > cooldown:
-                            drive.spike(0.05 * regrowth_multiplier, self.config.drives.max_pressure)
+                            spike = getattr(self.config.sensors.git, "behind_pressure_spike", 0.04)
+                            drive.spike(spike * regrowth_multiplier, self.config.drives.max_pressure)
                         else:
                             logger.debug(
                                 f"Git behind spike suppressed for {drive_name} "

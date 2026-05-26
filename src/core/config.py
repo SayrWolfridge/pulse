@@ -116,8 +116,11 @@ class GitSensorConfig:
     stale_push_minutes: int = 60        # minutes ahead of remote before "stale_push" fires
     fetch_remote: bool = False          # run `git fetch` each cycle (accurate behind-check)
     request_timeout: int = 10           # per-subprocess timeout (seconds)
-    unchanged_tail_regrowth_multiplier: float = 0.2
-    artifact_tail_regrowth_multiplier: float = 0.1
+    dirty_pressure_spike: float = 0.04
+    stale_push_pressure_spike: float = 0.04
+    behind_pressure_spike: float = 0.04
+    unchanged_tail_regrowth_multiplier: float = 0.1
+    artifact_tail_regrowth_multiplier: float = 0.05
     waiting_user_cooldown_minutes: int = 180
     waiting_user_pressure_cap: float = 0.9
 
@@ -497,6 +500,31 @@ class PulseConfig:
                     ),
                     request_timeout=gt.get(
                         "request_timeout", config.sensors.git.request_timeout
+                    ),
+                    dirty_pressure_spike=gt.get(
+                        "dirty_pressure_spike", config.sensors.git.dirty_pressure_spike
+                    ),
+                    stale_push_pressure_spike=gt.get(
+                        "stale_push_pressure_spike", config.sensors.git.stale_push_pressure_spike
+                    ),
+                    behind_pressure_spike=gt.get(
+                        "behind_pressure_spike", config.sensors.git.behind_pressure_spike
+                    ),
+                    unchanged_tail_regrowth_multiplier=gt.get(
+                        "unchanged_tail_regrowth_multiplier",
+                        config.sensors.git.unchanged_tail_regrowth_multiplier,
+                    ),
+                    artifact_tail_regrowth_multiplier=gt.get(
+                        "artifact_tail_regrowth_multiplier",
+                        config.sensors.git.artifact_tail_regrowth_multiplier,
+                    ),
+                    waiting_user_cooldown_minutes=gt.get(
+                        "waiting_user_cooldown_minutes",
+                        config.sensors.git.waiting_user_cooldown_minutes,
+                    ),
+                    waiting_user_pressure_cap=gt.get(
+                        "waiting_user_pressure_cap",
+                        config.sensors.git.waiting_user_pressure_cap,
                     ),
                 ),
                 web=WebSensorConfig(
