@@ -794,6 +794,37 @@ class TestDriveEngineIntegration:
         assert git_context["commits_ahead"] == 16
         assert "Use this repo_path" in engine.drives["pulse_git"].source_data["message"]
 
+    def test_commits_behind_routes_to_repo_git_drive(self):
+        """Behind-upstream repos wake their repo-local git drive, not generic growth."""
+        engine = self._make_engine()
+        engine.drives["pulse_git"] = Drive(name="pulse_git", category="pulse_git", pressure=0.0, weight=1.0)
+        engine.drives["growth"] = Drive(name="growth", category="growth", pressure=0.0, weight=1.0)
+
+        sensor_data = {
+            "git": {
+                "repos": [
+                    {
+                        "path": "/home/lisa/addons/pulse",
+                        "name": "pulse",
+                        "drives": ["pulse_git"],
+                        "pressure_dirty": False,
+                        "stale_push": False,
+                        "commits_ahead": 0,
+                        "commits_behind": 2,
+                    }
+                ],
+            }
+        }
+
+        engine._apply_sensor_spikes(sensor_data)
+
+        git_context = engine.drives["pulse_git"].source_data["git"]
+        assert engine.drives["pulse_git"].pressure > 0.0
+        assert engine.drives["growth"].pressure == 0.0
+        assert git_context["reasons"] == ["commits_behind"]
+        assert git_context["commits_behind"] == 2
+        assert "reason=commits_behind" in engine.drives["pulse_git"].source_data["message"]
+
 
 # ---- Sensor manager registration ----
 

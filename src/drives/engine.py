@@ -153,13 +153,15 @@ class DriveEngine:
         self._refresh_sources()
 
     @staticmethod
-    def _git_drive_context(repo: dict, *, dirty_for_pressure: bool, stale_push: bool) -> dict:
+    def _git_drive_context(repo: dict, *, dirty_for_pressure: bool, stale_push: bool, commits_behind: bool = False) -> dict:
         """Build the explicit contract an agent receives for repo-local git drives."""
         reasons = []
         if dirty_for_pressure:
             reasons.append("dirty_worktree")
         if stale_push:
             reasons.append("stale_push")
+        if commits_behind:
+            reasons.append("commits_behind")
         if not reasons:
             reasons.append("clean")
 
@@ -220,9 +222,15 @@ class DriveEngine:
                     or repo.get("untracked_files", 0) > 0
                 )
             stale_push = bool(repo.get("stale_push"))
-            repo_has_git_pressure = bool(dirty_for_pressure or stale_push)
+            commits_behind = bool(repo.get("commits_behind", 0) > 0)
+            repo_has_git_pressure = bool(dirty_for_pressure or stale_push or commits_behind)
             repo_drives = repo.get("drives", []) or []
-            git_context = self._git_drive_context(repo, dirty_for_pressure=bool(dirty_for_pressure), stale_push=stale_push)
+            git_context = self._git_drive_context(
+                repo,
+                dirty_for_pressure=bool(dirty_for_pressure),
+                stale_push=stale_push,
+                commits_behind=commits_behind,
+            )
             waiting_for_user = bool(repo.get("waiting_for_user"))
             unchanged_tail = bool(repo.get("unchanged_pressure_tail"))
             artifact_only_tail = bool(repo.get("artifact_only_tail"))
@@ -280,14 +288,31 @@ class DriveEngine:
                             drive.source_data["git"]["waiting_for_user"] = True
                             drive.source_data["git"]["waiting_reason"] = repo.get("waiting_reason")
                         routed_git_spike = True
+            if commits_behind:
+                for drive_name in repo_drives:
+                    if drive_name in self.drives:
+                        drive = self.drives[drive_name]
+                        since_addressed = time.time() - drive.last_addressed
+                        cooldown = getattr(self.config.openclaw, "min_trigger_interval", 300)
+                        if waiting_for_user:
+                            cap = getattr(self.config.sensors.git, "waiting_user_pressure_cap", 0.9)
+                            drive.pressure = min(drive.pressure, cap)
+                        elif drive.last_addressed <= 0 or since_addressed > cooldown:
+                            drive.spike(0.05 * regrowth_multiplier, self.config.drives.max_pressure)
+                        else:
+                            logger.debug(
+                                f"Git behind spike suppressed for {drive_name} "
+                                f"(addressed {since_addressed:.0f}s ago, pressure={drive.pressure:.2f})"
+                            )
+                        drive.source_data["git"] = git_context
+                        drive.source_data["message"] = git_context["summary"]
+                        routed_git_spike = True
             if not repo_has_git_pressure:
                 for drive_name in repo_drives:
                     if drive_name in self.drives and self._is_git_drive(drive_name):
                         self.drives[drive_name].pressure = 0.0
                         self.drives[drive_name].source_data.pop("git", None)
                         self.drives[drive_name].source_data.pop("message", None)
-            if repo.get("commits_behind", 0) > 0 and "growth" in self.drives:
-                self.drives["growth"].spike(0.1, self.config.drives.max_pressure)
 
         # Backward compatibility for tests/older sensors without per-repo data.
         if not routed_git_spike and not git_data.get("repos"):
