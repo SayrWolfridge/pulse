@@ -575,8 +575,8 @@ class TestDriveEngineIntegration:
 
         assert stale_pressure > dirty_pressure
 
-    def test_behind_spikes_growth(self):
-        """Git commits_behind fires growth drive spike."""
+    def test_behind_does_not_spike_generic_growth(self):
+        """Legacy aggregate git commits_behind no longer wakes generic growth."""
         engine = self._make_engine()
         initial_growth = engine.drives["growth"].pressure
 
@@ -589,7 +589,7 @@ class TestDriveEngineIntegration:
             }
         }
         engine._apply_sensor_spikes(sensor_data)
-        assert engine.drives["growth"].pressure > initial_growth
+        assert engine.drives["growth"].pressure == initial_growth
 
     def test_untracked_files_spike_goals(self):
         """Untracked files also spike goals drive for legacy aggregate sensor data."""

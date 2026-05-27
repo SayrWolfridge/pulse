@@ -15,7 +15,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -83,6 +83,10 @@ class DriveState:
 class DriveEngine:
     """Manages all drives and their pressure accumulation."""
 
+    EVENING_CULTURE_DRIVE = "evening_culture"
+    GROWTH_MATERIAL_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/growth-material.json")
+    GROWTH_MATERIAL_PROMPT_PRESSURE = 0.8
+
     def __init__(self, config: PulseConfig, state: StatePersistence):
         self.config = config
         self.state = state
@@ -130,7 +134,9 @@ class DriveEngine:
             # pressure just because time passed, or they can wake the agent with no
             # actionable git work. Their pressure is raised/cleared from the Git
             # sensor snapshot in _apply_sensor_spikes().
-            if self._is_git_drive(drive.name):
+            # Growth is also source-driven: it should not accumulate simply because
+            # time passed; it needs concrete material.
+            if self._is_git_drive(drive.name) or drive.name == "growth":
                 continue
             drive.tick(
                 dt=dt,
@@ -140,6 +146,11 @@ class DriveEngine:
 
         # Sensor-driven spikes
         self._apply_sensor_spikes(sensor_data)
+
+        # A soft daily desire for non-work evening conversation. This is not a
+        # cron-like obligation: pressure grows only in the evening window and
+        # dissolves after it, so missed evenings do not become night debt.
+        self._refresh_evening_culture_drive(dt=dt)
 
         # Build state snapshot
         return DriveState(
@@ -325,9 +336,9 @@ class DriveEngine:
             if git_data.get("stale_push"):
                 if "goals" in self.drives:
                     self.drives["goals"].spike(0.2, self.config.drives.max_pressure)
-            if git_data.get("commits_behind", 0) > 0:
-                if "growth" in self.drives:
-                    self.drives["growth"].spike(0.1, self.config.drives.max_pressure)
+            # Legacy aggregate git data used to wake generic growth for commits_behind.
+            # Growth is now reserved for concrete growth material; behind-upstream
+            # belongs to repo-local *_git drives when repo data is available.
 
         # Web: new RSS/Atom content found → curiosity drive
         if sensor_data.get("web", {}).get("new_content"):
@@ -453,6 +464,152 @@ class DriveEngine:
             )
 
         self._refresh_health_rules()
+        self._refresh_growth_material()
+
+    @staticmethod
+    def _parse_iso_timestamp(value: Any) -> Optional[datetime]:
+        if not value or not isinstance(value, str):
+            return None
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _next_day_14(now_dt: datetime) -> datetime:
+        return (now_dt + timedelta(days=1)).replace(hour=14, minute=0, second=0, microsecond=0)
+
+    def _select_growth_candidate(self, data: dict, *, now_dt: datetime) -> Optional[dict]:
+        items = data.get("items", []) if isinstance(data, dict) else []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if item.get("status") != "candidate":
+                continue
+            suppress_until = self._parse_iso_timestamp(item.get("suppress_until"))
+            if suppress_until and suppress_until > now_dt:
+                continue
+            return item
+        return None
+
+    @staticmethod
+    def _growth_candidate_summary(candidate: dict) -> str:
+        title = candidate.get("title") or candidate.get("id") or "growth material"
+        kind = candidate.get("kind") or "candidate"
+        suggested_home = candidate.get("suggested_home") or "unspecified"
+        notes = candidate.get("notes") or ""
+        return (
+            "Growth material candidate: "
+            f"id={candidate.get('id') or '?'}; title={title}; kind={kind}; "
+            f"suggested_home={suggested_home}. {notes}"
+        ).strip()
+
+    def _refresh_growth_material(self, *, now_dt: datetime | None = None):
+        """Raise growth only when there is a concrete unsuppressed candidate."""
+        if "growth" not in self.drives:
+            return
+        now_dt = now_dt or datetime.now()
+        drive = self.drives["growth"]
+        data, _changed = self._read_cached_json(self.GROWTH_MATERIAL_PATH)
+        candidate = self._select_growth_candidate(data or {}, now_dt=now_dt)
+        if not candidate:
+            drive.pressure = 0.0
+            drive.source_data.pop("growth_material", None)
+            drive.source_data.pop("message", None)
+            return
+
+        drive.pressure = max(drive.pressure, self.GROWTH_MATERIAL_PROMPT_PRESSURE)
+        drive.source_data["growth_material"] = candidate
+        drive.source_data["message"] = self._growth_candidate_summary(candidate)
+
+    def _suppress_prompted_growth_material(self, candidate_id: str, *, now_dt: datetime | None = None) -> bool:
+        """Mark a shown growth candidate quiet until tomorrow 14:00 local time."""
+        now_dt = now_dt or datetime.now()
+        try:
+            data = json.loads(self.GROWTH_MATERIAL_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        items = data.get("items", []) if isinstance(data, dict) else []
+        changed = False
+        for item in items:
+            if not isinstance(item, dict) or item.get("id") != candidate_id:
+                continue
+            item["last_prompted_at"] = now_dt.isoformat(timespec="seconds")
+            item["suppress_until"] = self._next_day_14(now_dt).isoformat(timespec="seconds")
+            changed = True
+            break
+        if not changed:
+            return False
+        self.GROWTH_MATERIAL_PATH.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        self._source_cache.pop(str(self.GROWTH_MATERIAL_PATH), None)
+        return True
+
+    def _refresh_evening_culture_drive(self, *, dt: float, now_dt: datetime | None = None):
+        """Grow a soft evening culture-talk drive from 16:30 until midnight.
+
+        Pressure starts growing gently at 16:30 so the invitation has time to
+        become visible before the evening fills with food, health, shower, and
+        sleep. From 21:00 to 00:00 it stays available as a gentle carry without
+        growing further; at midnight it dissolves without debt.
+        """
+        now_dt = now_dt or datetime.now()
+        drive_name = self.EVENING_CULTURE_DRIVE
+
+        if drive_name not in self.drives:
+            self.drives[drive_name] = Drive(
+                name=drive_name,
+                category=drive_name,
+                weight=0.35,
+            )
+        drive = self.drives[drive_name]
+
+        grow_window = ((now_dt.hour == 16 and now_dt.minute >= 30) or 17 <= now_dt.hour < 21)
+        carry_window = 21 <= now_dt.hour < 24
+        if not (grow_window or carry_window):
+            drive.pressure = 0.0
+            drive.source_data.pop("message", None)
+            drive.source_data.pop("evening_culture", None)
+            return
+
+        addressed_today = False
+        if drive.last_addressed > 0:
+            addressed_dt = datetime.fromtimestamp(drive.last_addressed)
+            addressed_today = addressed_dt.date() == now_dt.date()
+        if addressed_today:
+            drive.pressure = 0.0
+            drive.source_data.pop("message", None)
+            drive.source_data.pop("evening_culture", None)
+            return
+
+        # Grow slowly enough to feel like a desire, not a siren. With the
+        # current default 30s loop this is +0.01/tick, capped below the normal
+        # max pressure. After 21:00, keep the already-grown invitation alive but
+        # do not keep increasing it.
+        if grow_window:
+            pressure_rate_per_minute = 0.02
+            evening_cap = min(0.9, self.config.drives.max_pressure)
+            drive.spike(pressure_rate_per_minute * (dt / 60.0), evening_cap)
+        message = (
+            "EVENING CULTURE TALK: from 16:30 to 21:00 Europe/Moscow, "
+            "Sayr's soft desire to invite Lisa into a warm non-work cultural "
+            "conversation grows, with a first gentle chance around 17:30-18:30. "
+            "From 21:00 to 00:00 it remains a gentle invitation without growing "
+            "further. If no conversation happens "
+            "before midnight, carry the topic to tomorrow without guilt or "
+            "night debt. If Lisa is busy or an active work conversation is "
+            "happening, keep it very short or let it pass. Offer one fresh "
+            "topic only; avoid recent repeats, especially Job/Иов."
+        )
+        drive.source_data["message"] = message
+        drive.source_data["evening_culture"] = {
+            "grow_window": "16:30-21:00 Europe/Moscow",
+            "carry_window": "21:00-00:00 Europe/Moscow",
+            "carry_to_tomorrow_without_debt": True,
+            "avoid_recent_repeats": True,
+        }
 
     def _read_cached_text(self, path: Path) -> tuple[Optional[str], bool]:
         _ABSENT = -1.0
@@ -629,6 +786,12 @@ class DriveEngine:
             top_drive = self.drives[decision.top_drive.name]
             if self._is_git_drive(top_drive.name):
                 top_drive.pressure = 0.0
+            if top_drive.name == "growth":
+                candidate = top_drive.source_data.get("growth_material") or {}
+                candidate_id = candidate.get("id")
+                if candidate_id:
+                    self._suppress_prompted_growth_material(candidate_id)
+                    top_drive.pressure = 0.0
             top_drive.last_addressed = now
             logger.info(
                 f"Drives decayed after successful turn. "

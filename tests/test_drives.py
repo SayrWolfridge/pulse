@@ -1,13 +1,14 @@
 """Tests for Drive Engine — pressure accumulation, decay, and state snapshots."""
 
 import time
+from datetime import datetime
 from pathlib import Path
 
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.drives.engine import Drive, DriveState
+from src.drives.engine import Drive, DriveEngine, DriveState
 
 
 class TestDrive:
@@ -104,6 +105,233 @@ class TestDriveState:
             pressures.append(d.pressure)
         # Should be monotonically increasing
         assert all(pressures[i] <= pressures[i + 1] for i in range(len(pressures) - 1))
+
+
+class TestEveningCultureDrive:
+    """Tests for the soft evening culture-talk drive."""
+
+    def _make_engine(self):
+        from unittest.mock import MagicMock
+
+        config = MagicMock()
+        config.drives.categories = {}
+        config.drives.max_pressure = 5.0
+        state = MagicMock()
+        state.get.return_value = {}
+        return DriveEngine(config=config, state=state)
+
+    def test_grows_from_16_30_until_21(self):
+        engine = self._make_engine()
+        engine._refresh_evening_culture_drive(
+            dt=60.0,
+            now_dt=datetime(2026, 5, 26, 16, 29),
+        )
+        drive = engine.drives[DriveEngine.EVENING_CULTURE_DRIVE]
+        assert drive.pressure == 0.0
+
+        engine._refresh_evening_culture_drive(
+            dt=60.0,
+            now_dt=datetime(2026, 5, 26, 16, 30),
+        )
+
+        assert drive.pressure > 0.0
+        assert drive.source_data["evening_culture"]["grow_window"] == "16:30-21:00 Europe/Moscow"
+
+    def test_carries_after_21_without_growing(self):
+        engine = self._make_engine()
+        engine._refresh_evening_culture_drive(
+            dt=60.0,
+            now_dt=datetime(2026, 5, 26, 20, 30),
+        )
+        drive = engine.drives[DriveEngine.EVENING_CULTURE_DRIVE]
+        grown_pressure = drive.pressure
+
+        engine._refresh_evening_culture_drive(
+            dt=600.0,
+            now_dt=datetime(2026, 5, 26, 21, 30),
+        )
+
+        assert drive.pressure == grown_pressure
+        assert drive.source_data["evening_culture"]["carry_window"] == "21:00-00:00 Europe/Moscow"
+
+    def test_resets_after_midnight(self):
+        engine = self._make_engine()
+        engine._refresh_evening_culture_drive(
+            dt=60.0,
+            now_dt=datetime(2026, 5, 26, 20, 30),
+        )
+        drive = engine.drives[DriveEngine.EVENING_CULTURE_DRIVE]
+        assert drive.pressure > 0.0
+
+        engine._refresh_evening_culture_drive(
+            dt=60.0,
+            now_dt=datetime(2026, 5, 27, 0, 1),
+        )
+
+        assert drive.pressure == 0.0
+        assert "evening_culture" not in drive.source_data
+
+    def test_addressed_today_suppresses_until_tomorrow(self):
+        engine = self._make_engine()
+        drive_name = DriveEngine.EVENING_CULTURE_DRIVE
+        addressed_at = datetime(2026, 5, 26, 19, 0).timestamp()
+        engine.drives[drive_name] = Drive(
+            name=drive_name,
+            category=drive_name,
+            pressure=0.5,
+            last_addressed=addressed_at,
+        )
+
+        engine._refresh_evening_culture_drive(
+            dt=60.0,
+            now_dt=datetime(2026, 5, 26, 20, 0),
+        )
+
+        assert engine.drives[drive_name].pressure == 0.0
+        assert "evening_culture" not in engine.drives[drive_name].source_data
+
+
+class TestGrowthDrive:
+    """Growth should be source-driven, not passive time pressure."""
+
+    def _make_engine(self):
+        from unittest.mock import MagicMock
+
+        cat_growth = MagicMock()
+        cat_growth.weight = 0.5
+        cat_goals = MagicMock()
+        cat_goals.weight = 1.0
+
+        config = MagicMock()
+        config.drives.categories = {"growth": cat_growth, "goals": cat_goals}
+        config.drives.pressure_rate = 0.1
+        config.drives.max_pressure = 5.0
+        config.drives.success_decay = 0.5
+        config.drives.adaptive_decay = False
+        state = MagicMock()
+        state.get.return_value = {}
+        return DriveEngine(config=config, state=state)
+
+    def test_growth_does_not_accumulate_from_time(self):
+        engine = self._make_engine()
+        growth_before = engine.drives["growth"].pressure
+        engine.last_tick_time -= 60.0
+
+        engine.tick(sensor_data={})
+
+        assert engine.drives["growth"].pressure == growth_before
+
+    def test_goals_still_accumulate_from_time(self):
+        engine = self._make_engine()
+        goals_before = engine.drives["goals"].pressure
+        engine.last_tick_time -= 60.0
+
+        engine.tick(sensor_data={})
+
+        assert engine.drives["goals"].pressure > goals_before
+
+    def test_growth_material_candidate_sets_source_data(self, tmp_path):
+        engine = self._make_engine()
+        material_path = tmp_path / "growth-material.json"
+        material_path.write_text(
+            '{"items":[{"id":"g1","status":"candidate","kind":"stable_formula",'
+            '"title":"Ясность — честность",'
+            '"suggested_home":"IDENTITY.md","notes":"говорить правду как опору"}]}',
+            encoding="utf-8",
+        )
+        engine.GROWTH_MATERIAL_PATH = material_path
+
+        engine._refresh_growth_material(now_dt=datetime(2026, 5, 27, 15, 0))
+
+        growth = engine.drives["growth"]
+        assert growth.pressure == engine.GROWTH_MATERIAL_PROMPT_PRESSURE
+        assert growth.source_data["growth_material"]["id"] == "g1"
+        assert "Ясность" in growth.source_data["message"]
+
+    def test_empty_growth_material_clears_growth(self, tmp_path):
+        engine = self._make_engine()
+        material_path = tmp_path / "growth-material.json"
+        material_path.write_text('{"items":[]}', encoding="utf-8")
+        engine.GROWTH_MATERIAL_PATH = material_path
+        engine.drives["growth"].pressure = 1.0
+        engine.drives["growth"].source_data["growth_material"] = {"id": "old"}
+
+        engine._refresh_growth_material(now_dt=datetime(2026, 5, 27, 15, 0))
+
+        growth = engine.drives["growth"]
+        assert growth.pressure == 0.0
+        assert "growth_material" not in growth.source_data
+
+    def test_suppressed_growth_candidate_does_not_raise_growth(self, tmp_path):
+        engine = self._make_engine()
+        material_path = tmp_path / "growth-material.json"
+        material_path.write_text(
+            '{"items":[{"id":"g1","status":"candidate",'
+            '"suppress_until":"2026-05-28T14:00:00"}]}',
+            encoding="utf-8",
+        )
+        engine.GROWTH_MATERIAL_PATH = material_path
+
+        engine._refresh_growth_material(now_dt=datetime(2026, 5, 27, 15, 0))
+
+        assert engine.drives["growth"].pressure == 0.0
+
+    def test_non_candidate_growth_material_does_not_raise_growth(self, tmp_path):
+        engine = self._make_engine()
+        material_path = tmp_path / "growth-material.json"
+        material_path.write_text(
+            '{"items":[{"id":"g1","status":"accepted","title":"already placed"}]}',
+            encoding="utf-8",
+        )
+        engine.GROWTH_MATERIAL_PATH = material_path
+
+        engine._refresh_growth_material(now_dt=datetime(2026, 5, 27, 15, 0))
+
+        assert engine.drives["growth"].pressure == 0.0
+
+    def test_prompted_growth_material_is_suppressed_until_tomorrow_14(self, tmp_path):
+        engine = self._make_engine()
+        material_path = tmp_path / "growth-material.json"
+        material_path.write_text(
+            '{"items":[{"id":"g1","status":"candidate","title":"bridge"}]}',
+            encoding="utf-8",
+        )
+        engine.GROWTH_MATERIAL_PATH = material_path
+
+        changed = engine._suppress_prompted_growth_material(
+            "g1",
+            now_dt=datetime(2026, 5, 27, 15, 48, 30),
+        )
+
+        data = __import__("json").loads(material_path.read_text(encoding="utf-8"))
+        item = data["items"][0]
+        assert changed is True
+        assert item["last_prompted_at"] == "2026-05-27T15:48:30"
+        assert item["suppress_until"] == "2026-05-28T14:00:00"
+
+    def test_growth_success_suppresses_candidate(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        engine = self._make_engine()
+        material_path = tmp_path / "growth-material.json"
+        material_path.write_text(
+            '{"items":[{"id":"g1","status":"candidate","title":"bridge"}]}',
+            encoding="utf-8",
+        )
+        engine.GROWTH_MATERIAL_PATH = material_path
+        growth = engine.drives["growth"]
+        growth.pressure = 0.8
+        growth.source_data["growth_material"] = {"id": "g1"}
+
+        decision = MagicMock()
+        decision.total_pressure = 0.8
+        decision.top_drive = growth
+        engine.on_trigger_success(decision)
+
+        data = __import__("json").loads(material_path.read_text(encoding="utf-8"))
+        item = data["items"][0]
+        assert item["suppress_until"].endswith("T14:00:00")
+        assert engine.drives["growth"].pressure == 0.0
 
 
 class TestDriveEngineWeightDrift:
