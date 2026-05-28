@@ -121,6 +121,8 @@ class GitSensorConfig:
     behind_pressure_spike: float = 0.04
     unchanged_tail_regrowth_multiplier: float = 0.1
     artifact_tail_regrowth_multiplier: float = 0.05
+    old_dirty_tail_hours: float = 12.0
+    old_dirty_tail_pressure_floor: float = 1.0
     waiting_user_cooldown_minutes: int = 180
     waiting_user_pressure_cap: float = 0.9
 
@@ -517,6 +519,14 @@ class PulseConfig:
                     artifact_tail_regrowth_multiplier=gt.get(
                         "artifact_tail_regrowth_multiplier",
                         config.sensors.git.artifact_tail_regrowth_multiplier,
+                    ),
+                    old_dirty_tail_hours=gt.get(
+                        "old_dirty_tail_hours",
+                        config.sensors.git.old_dirty_tail_hours,
+                    ),
+                    old_dirty_tail_pressure_floor=gt.get(
+                        "old_dirty_tail_pressure_floor",
+                        config.sensors.git.old_dirty_tail_pressure_floor,
                     ),
                     waiting_user_cooldown_minutes=gt.get(
                         "waiting_user_cooldown_minutes",

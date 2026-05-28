@@ -139,6 +139,8 @@ sensors:
   git:
     enabled: false
     repos: []
+    old_dirty_tail_hours: 12
+    old_dirty_tail_pressure_floor: 1.0
     # Example:
     # repos:
     #   - "~/.openclaw/workspace"

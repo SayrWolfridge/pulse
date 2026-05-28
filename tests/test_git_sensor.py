@@ -81,6 +81,8 @@ class TestConfigParsing:
         assert config.sensors.git.behind_pressure_spike == 0.04
         assert config.sensors.git.unchanged_tail_regrowth_multiplier == 0.1
         assert config.sensors.git.artifact_tail_regrowth_multiplier == 0.05
+        assert config.sensors.git.old_dirty_tail_hours == 12.0
+        assert config.sensors.git.old_dirty_tail_pressure_floor == 1.0
 
     def test_yaml_round_trip(self, tmp_path):
         """Config values load from YAML correctly."""
@@ -99,6 +101,8 @@ sensors:
     behind_pressure_spike: 0.02
     unchanged_tail_regrowth_multiplier: 0.25
     artifact_tail_regrowth_multiplier: 0.15
+    old_dirty_tail_hours: 6
+    old_dirty_tail_pressure_floor: 0.8
     waiting_user_cooldown_minutes: 240
     waiting_user_pressure_cap: 0.7
 """
@@ -115,6 +119,8 @@ sensors:
         assert config.sensors.git.behind_pressure_spike == 0.02
         assert config.sensors.git.unchanged_tail_regrowth_multiplier == 0.25
         assert config.sensors.git.artifact_tail_regrowth_multiplier == 0.15
+        assert config.sensors.git.old_dirty_tail_hours == 6
+        assert config.sensors.git.old_dirty_tail_pressure_floor == 0.8
         assert config.sensors.git.waiting_user_cooldown_minutes == 240
         assert config.sensors.git.waiting_user_pressure_cap == 0.7
 
@@ -782,6 +788,35 @@ class TestDriveEngineIntegration:
         engine._apply_sensor_spikes(sensor_data)
 
         assert engine.drives["workspace_git"].pressure == pytest.approx(0.0002)
+
+    def test_old_unchanged_dirty_tail_gets_pressure_floor(self):
+        """Old unchanged git dirtiness should re-surface without immediate yelling."""
+        engine = self._make_engine()
+        engine.drives["workspace_git"] = Drive(
+            name="workspace_git",
+            category="workspace_git",
+            pressure=0.0,
+            weight=1.0,
+            last_addressed=time.time() - 13 * 3600,
+        )
+
+        sensor_data = {
+            "git": {
+                "repos": [
+                    {
+                        "drives": ["workspace_git"],
+                        "pressure_dirty": True,
+                        "unchanged_pressure_tail": True,
+                        "stale_push": False,
+                        "commits_behind": 0,
+                    }
+                ],
+            }
+        }
+
+        engine._apply_sensor_spikes(sensor_data)
+
+        assert engine.drives["workspace_git"].pressure == pytest.approx(1.0)
 
     def test_git_drive_source_data_carries_repo_contract(self):
         """Repo-local git drives expose the exact repo contract for trigger messages."""

@@ -270,6 +270,25 @@ class DriveEngine:
                         elif drive.last_addressed <= 0 or since_addressed > cooldown:
                             spike = getattr(self.config.sensors.git, "dirty_pressure_spike", 0.04)
                             drive.spike(spike * regrowth_multiplier, self.config.drives.max_pressure)
+                            old_dirty_tail_sec = (
+                                getattr(self.config.sensors.git, "old_dirty_tail_hours", 12.0)
+                                * 3600
+                            )
+                            old_dirty_tail_floor = getattr(
+                                self.config.sensors.git,
+                                "old_dirty_tail_pressure_floor",
+                                1.0,
+                            )
+                            if (
+                                drive.last_addressed > 0
+                                and unchanged_tail
+                                and not artifact_only_tail
+                                and since_addressed >= old_dirty_tail_sec
+                            ):
+                                drive.pressure = min(
+                                    self.config.drives.max_pressure,
+                                    max(drive.pressure, old_dirty_tail_floor),
+                                )
                         else:
                             logger.debug(
                                 f"Git dirty spike suppressed for {drive_name} "
