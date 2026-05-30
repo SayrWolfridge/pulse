@@ -155,9 +155,16 @@ class FeedbackLearner:
     def effective_weight(self, drive_name: str, base_weight: float) -> float:
         """
         Return the effective weight after applying the learner multiplier,
-        clamped to MIN_WEIGHT_FLOOR.
+        clamped to MIN_WEIGHT_FLOOR and then softly shaped by the circadian
+        daypart mixer when the DriveEngine helper is available.
         """
         adjusted = base_weight * self.get_weight_adjustment(drive_name)
+        try:
+            from pulse.src.drives.engine import DriveEngine
+
+            adjusted *= DriveEngine.circadian_weight_modifier(drive_name)
+        except Exception:
+            pass
         return max(MIN_WEIGHT_FLOOR, adjusted)
 
     def get_stats(self) -> dict:

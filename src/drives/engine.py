@@ -15,7 +15,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, time as datetime_time, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -152,6 +152,8 @@ class DriveEngine:
         # dissolves after it, so missed evenings do not become night debt.
         self._refresh_evening_culture_drive(dt=dt)
 
+        self._apply_circadian_weight_modifiers()
+
         # Build state snapshot
         return DriveState(
             drives=list(self.drives.values()),
@@ -162,6 +164,96 @@ class DriveEngine:
         """Read workspace source files and apply drive adjustments.
         Separated from tick() to isolate I/O from state transitions."""
         self._refresh_sources()
+
+    @staticmethod
+    def circadian_weight_modifier(drive_name: str, now_dt: datetime | None = None) -> float:
+        """Return a daypart multiplier for a drive's effective weight.
+
+        This is a soft mixer, not a new pressure source: raw drive pressure still
+        comes from the drive/sensor itself, while the multiplier changes how much
+        the drive is allowed to matter in the current part of the day.
+        """
+        now_dt = now_dt or datetime.now()
+        t = now_dt.time()
+        if datetime_time(2, 0) <= t < datetime_time(8, 0):
+            profile = "night"
+        elif datetime_time(8, 0) <= t < datetime_time(14, 0):
+            profile = "morning"
+        elif datetime_time(14, 0) <= t < datetime_time(17, 0):
+            profile = "day"
+        elif datetime_time(17, 0) <= t < datetime_time(22, 30):
+            profile = "evening"
+        else:
+            profile = "late"
+
+        modifiers = {
+            "night": {
+                "health": 1.15,
+                "emotions": 0.90,
+                "unfinished": 0.35,
+                "workspace_git": 0.20,
+                "obsidian_git": 0.20,
+                "pulse_git": 0.20,
+                "evening_culture": 0.25,
+                "curiosity": 0.35,
+                "growth": 0.35,
+            },
+            "morning": {
+                "health": 1.20,
+                "emotions": 0.95,
+                "unfinished": 0.90,
+                "workspace_git": 0.90,
+                "obsidian_git": 0.85,
+                "pulse_git": 0.85,
+                "evening_culture": 0.10,
+                "curiosity": 0.85,
+                "growth": 0.80,
+            },
+            "day": {
+                "health": 1.05,
+                "emotions": 0.95,
+                "unfinished": 1.05,
+                "workspace_git": 1.05,
+                "obsidian_git": 1.00,
+                "pulse_git": 1.00,
+                "evening_culture": 0.25,
+                "curiosity": 1.00,
+                "growth": 0.90,
+            },
+            "evening": {
+                "health": 1.00,
+                "emotions": 1.10,
+                "unfinished": 0.80,
+                "workspace_git": 0.60,
+                "obsidian_git": 0.60,
+                "pulse_git": 0.60,
+                "evening_culture": 1.60,
+                "curiosity": 0.85,
+                "growth": 0.80,
+            },
+            "late": {
+                "health": 1.20,
+                "emotions": 0.95,
+                "unfinished": 0.50,
+                "workspace_git": 0.30,
+                "obsidian_git": 0.30,
+                "pulse_git": 0.30,
+                "evening_culture": 0.50,
+                "curiosity": 0.45,
+                "growth": 0.40,
+            },
+        }
+        return modifiers.get(profile, {}).get(drive_name, 1.0)
+
+    def effective_weight(self, drive_name: str, base_weight: float) -> float:
+        """Apply the circadian daypart multiplier to a base/effective weight."""
+        return base_weight * self.circadian_weight_modifier(drive_name)
+
+    def _apply_circadian_weight_modifiers(self):
+        """Keep runtime drive weights aligned with base config/RL and daypart."""
+        for drive_name, drive in self.drives.items():
+            base = self.config_weight(drive_name)
+            drive.weight = self.effective_weight(drive_name, base)
 
     @staticmethod
     def _git_drive_context(repo: dict, *, dirty_for_pressure: bool, stale_push: bool, commits_behind: bool = False) -> dict:
