@@ -616,7 +616,9 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
                 "- allowed_next_step: no_action / not_actionable_now; do not invent work",
                 "- forbidden_without_lisa: do not search broadly, create tasks, start coding, change configs, or restart services just because curiosity fired",
                 f"- result_sink: {self.CURIOSITY_NO_ACTION_TRACE}",
-                "- stop_condition: suppress the wake after writing the trace",
+                "- delivery_rule: if this preflight happens before an agent wake, suppress the wake and only write trace/feedback for tuning",
+                "- visible_reply_if_awake: if the model was already awakened, do not stay silent; write a short diagnostic note naming the fired drive and the exact reason no actionable step exists, so the caller can tune the trigger",
+                "- stop_condition: after trace/feedback or the short diagnostic note, stop",
             ])
 
         if verdict["action"] == "sayr_thoughts_consolidation":

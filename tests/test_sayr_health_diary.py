@@ -830,6 +830,12 @@ def test_curiosity_no_open_questions_suppresses_and_discharges(monkeypatch, tmp_
     assert record["action"] == "no_action"
     assert record["discharge"] == "strong"
 
+    block = integration._build_curiosity_block()
+    assert "delivery_rule" in block
+    assert "visible_reply_if_awake" in block
+    assert "do not stay silent" in block
+    assert "short diagnostic note" in block
+
 
 def test_curiosity_contract_allows_bounded_hypothesis_creation_but_forbids_task_creation(monkeypatch, tmp_path):
     integration = _patch_curiosity_paths(
