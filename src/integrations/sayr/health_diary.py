@@ -114,6 +114,9 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
     HYPOTHESES = Path("/home/lisa/.openclaw/workspace/pulse/self/hypotheses.json")
     CURIOSITY = Path("/home/lisa/.openclaw/workspace/pulse/self/curiosity.json")
     CURIOSITY_NO_ACTION_TRACE = Path("/home/lisa/.openclaw/workspace/pulse/self/empty-curiosity-trace.jsonl")
+    SAYR_THOUGHTS_PROTOCOL = Path("/home/lisa/.openclaw/workspace/pulse/sayr-thoughts-consolidation-protocol.md")
+    SAYR_THOUGHTS_INDEX = Path("/home/lisa/.openclaw/workspace/memory/sayr-thoughts/blog/INDEX.md")
+    SAYR_THOUGHTS_PROCESS = Path("/home/lisa/.openclaw/workspace/memory/sayr-thoughts/blog/PROCESS.md")
     UNFINISHED_NO_ACTION_TRACE = Path("/home/lisa/.openclaw/workspace/pulse/self/empty-unfinished-trace.jsonl")
     TAIL_TRIAGE_PROTOCOL = Path("/home/lisa/.openclaw/workspace/pulse/tail-triage-protocol.md")
     AUTONOMOUS_TASKS = Path("/home/lisa/.openclaw/workspace/tasks/autonomous-tasks.md")
@@ -530,7 +533,15 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
                 "object": item,
             }
 
-        reason = "no open curiosity questions"
+        sayr_thoughts = self._sayr_thoughts_consolidation_object()
+        if sayr_thoughts:
+            return {
+                "action": "sayr_thoughts_consolidation",
+                "reason": f"permanent sayr-thoughts consolidation step available: {sayr_thoughts.get('topic')}",
+                "object": sayr_thoughts,
+            }
+
+        reason = "no open curiosity questions and no sayr-thoughts consolidation topics"
         if record_trace:
             self._record_empty_curiosity_trace(reason, discharge="strong")
         return {"action": "no_action", "reason": reason, "object": None, "discharge": "strong"}
@@ -600,13 +611,16 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         if verdict["action"] == "no_action":
             return "\n".join([
                 "Bounded-curiosity contract:",
-                "- object: none — no open curiosity questions were found",
-                "- pressure_reason: curiosity fired, but its source of truth is empty",
+                "- object: none — no open curiosity questions and no sayr-thoughts consolidation topics were found",
+                "- pressure_reason: curiosity fired, but its source of truth has no actionable item",
                 "- allowed_next_step: no_action / not_actionable_now; do not invent work",
                 "- forbidden_without_lisa: do not search broadly, create tasks, start coding, change configs, or restart services just because curiosity fired",
                 f"- result_sink: {self.CURIOSITY_NO_ACTION_TRACE}",
                 "- stop_condition: suppress the wake after writing the trace",
             ])
+
+        if verdict["action"] == "sayr_thoughts_consolidation":
+            return self._build_sayr_thoughts_consolidation_block(verdict["object"] or {})
 
         item = verdict["object"] or {}
         question_id = item.get("id") or "unnamed"
@@ -640,6 +654,73 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
                 lines.append(f"- previous_next: {next_hint}")
 
         return "\n".join(lines)
+
+    def _sayr_thoughts_consolidation_object(self) -> dict | None:
+        """Return one permanent small-step consolidation target.
+
+        Sayr-thoughts consolidation is an ongoing curiosity process, not a
+        one-off question that becomes permanently resolved. It is actionable
+        when the blog index still has a topic in `не начато` or `разбор`.
+        """
+        if not self.SAYR_THOUGHTS_INDEX.exists():
+            return None
+        try:
+            text = self.SAYR_THOUGHTS_INDEX.read_text(encoding="utf-8")
+        except Exception:
+            return None
+
+        candidates = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("|") or stripped.startswith("|---") or stripped.startswith("| Тема "):
+                continue
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            if len(cells) < 4:
+                continue
+            topic, file_cell, status, notes = cells[:4]
+            if status not in {"не начато", "разбор"}:
+                continue
+            filename = file_cell.strip("`")
+            candidates.append({
+                "id": "sayr_thoughts_consolidation",
+                "topic": topic,
+                "file": filename,
+                "status": status,
+                "notes": notes,
+                "mode": "sayr_thoughts_consolidation",
+                "protocol": str(self.SAYR_THOUGHTS_PROTOCOL),
+                "current_index": str(self.SAYR_THOUGHTS_INDEX),
+                "process_doc": str(self.SAYR_THOUGHTS_PROCESS),
+                "result_sink": str(self.SAYR_THOUGHTS_INDEX.parent / filename) if filename else str(self.SAYR_THOUGHTS_INDEX),
+            })
+
+        if not candidates:
+            return None
+        return candidates[0]
+
+    def _build_sayr_thoughts_consolidation_block(self, item: dict) -> str:
+        topic = item.get("topic") or "unnamed topic"
+        status = item.get("status") or "unknown"
+        target_file = item.get("file") or "INDEX.md"
+        result_sink = item.get("result_sink") or str(self.SAYR_THOUGHTS_INDEX)
+        notes = item.get("notes") or ""
+        return "\n".join([
+            "Sayr-thoughts consolidation contract:",
+            "- process: permanent curiosity process; never treat it as fully done just because one turn ran",
+            f"- protocol: read {self.SAYR_THOUGHTS_PROTOCOL}",
+            f"- current_index: read {self.SAYR_THOUGHTS_INDEX}",
+            f"- process_doc: read {self.SAYR_THOUGHTS_PROCESS}",
+            f"- topic: {topic}",
+            f"- current_status: {status}",
+            f"- target_file: {target_file}",
+            f"- notes: {notes}",
+            "- allowed_next_step: exactly one small step from the protocol: intake-sweep OR extract 3-7 theses OR add one short draft fragment OR update INDEX status/sources",
+            "- required_boundary: do not process the whole blog, do not broad-search all memory, do not delete or rewrite source drafts",
+            "- completion_bookkeeping: do not mark this permanent process resolved; only leave the concrete file/index updated or no-op if no safe small step exists",
+            f"- result_sink: {result_sink}",
+            "- stop_condition: after one small step, stop and report only the concrete step/no-op",
+            "- visible_reply: if Lisa did not ask for details, keep it short and do not turn the process into a task lecture",
+        ])
 
 
     def _unfinished_preflight(self, *, record_trace: bool = False) -> dict:

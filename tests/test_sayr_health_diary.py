@@ -183,6 +183,9 @@ def _patch_unfinished_paths(monkeypatch, tmp_path, hypotheses):
     monkeypatch.setattr(SayrHealthDiaryIntegration, "AUTONOMOUS_TASKS", tmp_path / "autonomous-tasks.md")
     monkeypatch.setattr(SayrHealthDiaryIntegration, "UNFINISHED_NO_ACTION_TRACE", tmp_path / "empty-unfinished-trace.jsonl")
     monkeypatch.setattr(SayrHealthDiaryIntegration, "TAIL_TRIAGE_PROTOCOL", tmp_path / "tail-triage-protocol.md")
+    monkeypatch.setattr(SayrHealthDiaryIntegration, "SAYR_THOUGHTS_PROTOCOL", tmp_path / "missing-protocol.md")
+    monkeypatch.setattr(SayrHealthDiaryIntegration, "SAYR_THOUGHTS_INDEX", tmp_path / "missing-index.md")
+    monkeypatch.setattr(SayrHealthDiaryIntegration, "SAYR_THOUGHTS_PROCESS", tmp_path / "missing-process.md")
     return SayrHealthDiaryIntegration()
 
 
@@ -193,6 +196,9 @@ def _patch_curiosity_paths(monkeypatch, tmp_path, questions):
     curiosity_path.write_text(json.dumps({"questions": questions}), encoding="utf-8")
     monkeypatch.setattr(SayrHealthDiaryIntegration, "CURIOSITY", curiosity_path)
     monkeypatch.setattr(SayrHealthDiaryIntegration, "CURIOSITY_NO_ACTION_TRACE", tmp_path / "empty-curiosity-trace.jsonl")
+    monkeypatch.setattr(SayrHealthDiaryIntegration, "SAYR_THOUGHTS_PROTOCOL", tmp_path / "missing-protocol.md")
+    monkeypatch.setattr(SayrHealthDiaryIntegration, "SAYR_THOUGHTS_INDEX", tmp_path / "missing-index.md")
+    monkeypatch.setattr(SayrHealthDiaryIntegration, "SAYR_THOUGHTS_PROCESS", tmp_path / "missing-process.md")
     return SayrHealthDiaryIntegration()
 
 
@@ -767,6 +773,41 @@ def test_curiosity_skips_resolved_questions(monkeypatch, tmp_path):
 
     assert verdict["action"] == "bounded_curiosity_reflection"
     assert verdict["object"]["id"] == "c2"
+    assert not integration.CURIOSITY_NO_ACTION_TRACE.exists()
+
+
+def test_curiosity_routes_to_permanent_sayr_thoughts_consolidation(monkeypatch, tmp_path):
+    integration = _patch_curiosity_paths(
+        monkeypatch,
+        tmp_path,
+        [{"id": "c1", "text": "Already settled", "status": "resolved"}],
+    )
+    blog_dir = tmp_path / "memory" / "sayr-thoughts" / "blog"
+    blog_dir.mkdir(parents=True)
+    integration.SAYR_THOUGHTS_PROTOCOL = tmp_path / "pulse" / "sayr-thoughts-consolidation-protocol.md"
+    integration.SAYR_THOUGHTS_PROCESS = blog_dir / "PROCESS.md"
+    integration.SAYR_THOUGHTS_INDEX = blog_dir / "INDEX.md"
+    integration.SAYR_THOUGHTS_PROTOCOL.parent.mkdir(parents=True)
+    integration.SAYR_THOUGHTS_PROTOCOL.write_text("protocol", encoding="utf-8")
+    integration.SAYR_THOUGHTS_PROCESS.write_text("process", encoding="utf-8")
+    integration.SAYR_THOUGHTS_INDEX.write_text(
+        "\n".join([
+            "| Тема | Файл | Статус | Примечания |",
+            "|---|---|---:|---|",
+            "| Здоровье как забота | `health.md` | не начато | first |",
+        ]),
+        encoding="utf-8",
+    )
+
+    verdict = integration._curiosity_preflight(record_trace=True)
+    assert verdict["action"] == "sayr_thoughts_consolidation"
+    assert verdict["object"]["topic"] == "Здоровье как забота"
+
+    block = integration._build_curiosity_block()
+    assert "Sayr-thoughts consolidation contract" in block
+    assert "permanent curiosity process" in block
+    assert "Здоровье как забота" in block
+    assert "do not mark this permanent process resolved" in block
     assert not integration.CURIOSITY_NO_ACTION_TRACE.exists()
 
 
