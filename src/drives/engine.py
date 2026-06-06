@@ -87,6 +87,7 @@ class DriveEngine:
     EVENING_CULTURE_DRIVE = "evening_culture"
     EVENING_CULTURE_CURRENT_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/evening-culture-current.json")
     EVENING_CULTURE_TOPICS_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/evening-culture-topics.md")
+    EVENING_CULTURE_REMINDER_INTERVAL_SECONDS = 90 * 60
     GROWTH_MATERIAL_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/growth-material.json")
     GROWTH_MATERIAL_PROMPT_PRESSURE = 0.8
 
@@ -683,16 +684,14 @@ class DriveEngine:
         grow_window = ((now_dt.hour == 16 and now_dt.minute >= 30) or 17 <= now_dt.hour < 21)
         carry_window = 21 <= now_dt.hour < 24
         if not (grow_window or carry_window):
+            self._carry_evening_culture_after_midnight(now_dt=now_dt)
             drive.pressure = 0.0
             drive.source_data.pop("message", None)
             drive.source_data.pop("evening_culture", None)
             return
 
-        addressed_today = False
-        if drive.last_addressed > 0:
-            addressed_dt = datetime.fromtimestamp(drive.last_addressed)
-            addressed_today = addressed_dt.date() == now_dt.date()
-        if addressed_today:
+        current = self._ensure_evening_culture_current_topic(now_dt=now_dt)
+        if current and current.get("status") == "discussed":
             drive.pressure = 0.0
             drive.source_data.pop("message", None)
             drive.source_data.pop("evening_culture", None)
@@ -706,6 +705,13 @@ class DriveEngine:
             pressure_rate_per_minute = 0.02
             evening_cap = min(0.9, self.config.drives.max_pressure)
             drive.spike(pressure_rate_per_minute * (dt / 60.0), evening_cap)
+        elif carry_window and current:
+            reminder_pressure = self._evening_culture_reminder_pressure(
+                current,
+                now_dt=now_dt,
+            )
+            if reminder_pressure > 0:
+                drive.pressure = max(drive.pressure, reminder_pressure)
         message = (
             "EVENING CULTURE TALK: from 16:30 to 21:00 Europe/Moscow, "
             "Sayr's soft desire to invite Lisa into a warm non-work cultural "
@@ -724,15 +730,19 @@ class DriveEngine:
             "carry_to_tomorrow_without_debt": True,
             "avoid_recent_repeats": True,
         }
-        current = self._ensure_evening_culture_current_topic(now_dt=now_dt)
         if current:
             drive.source_data["evening_culture"].update({
                 "current_topic_id": current.get("id"),
                 "current_topic": current.get("title"),
                 "offered_at": current.get("offered_at"),
+                "last_reminded_at": current.get("last_reminded_at"),
+                "reminder_interval_minutes": int(self.EVENING_CULTURE_REMINDER_INTERVAL_SECONDS / 60),
                 "status": current.get("status"),
             })
-            drive.source_data["message"] = f"{message} Current offered topic: {current.get('title')}"
+            drive.source_data["message"] = (
+                f"{message} Current offered topic: {current.get('title')}. "
+                "If this is a reminder, make it one tiny warm reminder, not a new topic."
+            )
 
     @staticmethod
     def _extract_evening_culture_candidates(text: str) -> List[str]:
@@ -767,6 +777,15 @@ class DriveEngine:
             return None
         return data if isinstance(data, dict) else None
 
+    @staticmethod
+    def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value))
+        except Exception:
+            return None
+
     def _write_evening_culture_current(self, data: dict):
         self.EVENING_CULTURE_CURRENT_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.EVENING_CULTURE_CURRENT_PATH.write_text(
@@ -784,7 +803,7 @@ class DriveEngine:
         """
         now_dt = now_dt or datetime.now()
         current = self._read_evening_culture_current()
-        if current and current.get("status") in {"offered", "carried"} and current.get("title"):
+        if current and current.get("status") in {"offered", "carried", "discussed"} and current.get("title"):
             return current
 
         title = self._select_evening_culture_candidate()
@@ -795,10 +814,47 @@ class DriveEngine:
             "title": title,
             "status": "offered",
             "offered_at": now_dt.isoformat(timespec="seconds"),
+            "last_reminded_at": now_dt.isoformat(timespec="seconds"),
+            "reminder_interval_minutes": int(self.EVENING_CULTURE_REMINDER_INTERVAL_SECONDS / 60),
             "source": str(self.EVENING_CULTURE_TOPICS_PATH),
         }
         self._write_evening_culture_current(current)
         return current
+
+    def _evening_culture_reminder_pressure(self, current: dict, *, now_dt: datetime) -> float:
+        """Return a small reminder pressure if the same topic has rested long enough."""
+        anchor = self._parse_iso_datetime(current.get("last_reminded_at"))
+        if anchor is None:
+            anchor = self._parse_iso_datetime(current.get("offered_at"))
+        if anchor is None:
+            return 0.0
+        elapsed = (now_dt - anchor).total_seconds()
+        if elapsed < self.EVENING_CULTURE_REMINDER_INTERVAL_SECONDS:
+            return 0.0
+        return min(0.9, self.config.drives.max_pressure)
+
+    def _mark_evening_culture_prompted(self, *, now_dt: datetime | None = None) -> bool:
+        """Record that the current topic was offered/reminded, without closing it."""
+        now_dt = now_dt or datetime.now()
+        current = self._read_evening_culture_current()
+        if not current or not current.get("title"):
+            return False
+        current["status"] = "offered"
+        current["last_reminded_at"] = now_dt.isoformat(timespec="seconds")
+        current["reminder_interval_minutes"] = int(self.EVENING_CULTURE_REMINDER_INTERVAL_SECONDS / 60)
+        self._write_evening_culture_current(current)
+        return True
+
+    def _carry_evening_culture_after_midnight(self, *, now_dt: datetime | None = None) -> bool:
+        """After midnight, keep an unresolved topic for tomorrow without pressure."""
+        now_dt = now_dt or datetime.now()
+        current = self._read_evening_culture_current()
+        if not current or current.get("status") not in {"offered", "carried"}:
+            return False
+        current["status"] = "carried"
+        current["carried_after"] = now_dt.isoformat(timespec="seconds")
+        self._write_evening_culture_current(current)
+        return True
 
     def _read_cached_text(self, path: Path) -> tuple[Optional[str], bool]:
         _ABSENT = -1.0
@@ -981,6 +1037,9 @@ class DriveEngine:
                 if candidate_id:
                     self._suppress_prompted_growth_material(candidate_id)
                     top_drive.pressure = 0.0
+            if top_drive.name == self.EVENING_CULTURE_DRIVE:
+                self._mark_evening_culture_prompted(now_dt=datetime.fromtimestamp(now))
+                top_drive.pressure = 0.0
             top_drive.last_addressed = now
             logger.info(
                 f"Drives decayed after successful turn. "
