@@ -190,6 +190,58 @@ class TestEveningCultureDrive:
         assert engine.drives[drive_name].pressure == 0.0
         assert "evening_culture" not in engine.drives[drive_name].source_data
 
+    def test_evening_culture_persists_current_topic(self, tmp_path):
+        engine = self._make_engine()
+        topics_path = tmp_path / "evening-culture-topics.md"
+        current_path = tmp_path / "evening-culture-current.json"
+        topics_path.write_text(
+            "# Evening culture topics\n\n"
+            "## Уже были\n\n"
+            "## Кандидаты\n\n"
+            "- Антигона: долг перед живыми и мёртвыми\n"
+            "- Прометей: дар огня\n",
+            encoding="utf-8",
+        )
+        engine.EVENING_CULTURE_TOPICS_PATH = topics_path
+        engine.EVENING_CULTURE_CURRENT_PATH = current_path
+
+        engine._refresh_evening_culture_drive(
+            dt=60.0,
+            now_dt=datetime(2026, 6, 6, 17, 9),
+        )
+
+        data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
+        assert data["title"] == "Антигона"
+        assert data["status"] == "offered"
+        source = engine.drives[DriveEngine.EVENING_CULTURE_DRIVE].source_data["evening_culture"]
+        assert source["current_topic"] == "Антигона"
+
+    def test_evening_culture_reuses_existing_current_topic(self, tmp_path):
+        engine = self._make_engine()
+        topics_path = tmp_path / "evening-culture-topics.md"
+        current_path = tmp_path / "evening-culture-current.json"
+        topics_path.write_text(
+            "# Evening culture topics\n\n"
+            "## Уже были\n\n"
+            "## Кандидаты\n\n"
+            "- Антигона: долг перед живыми и мёртвыми\n",
+            encoding="utf-8",
+        )
+        current_path.write_text(
+            '{"id":"prometei","title":"Прометей","status":"carried","offered_at":"2026-06-05T17:09:00"}',
+            encoding="utf-8",
+        )
+        engine.EVENING_CULTURE_TOPICS_PATH = topics_path
+        engine.EVENING_CULTURE_CURRENT_PATH = current_path
+
+        engine._refresh_evening_culture_drive(
+            dt=60.0,
+            now_dt=datetime(2026, 6, 6, 17, 9),
+        )
+
+        source = engine.drives[DriveEngine.EVENING_CULTURE_DRIVE].source_data["evening_culture"]
+        assert source["current_topic"] == "Прометей"
+
 
 class TestGrowthDrive:
     """Growth should be source-driven, not passive time pressure."""

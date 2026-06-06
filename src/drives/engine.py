@@ -13,6 +13,7 @@ This is the synthetic equivalent of "wanting to do something."
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, time as datetime_time, timedelta
@@ -84,6 +85,8 @@ class DriveEngine:
     """Manages all drives and their pressure accumulation."""
 
     EVENING_CULTURE_DRIVE = "evening_culture"
+    EVENING_CULTURE_CURRENT_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/evening-culture-current.json")
+    EVENING_CULTURE_TOPICS_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/evening-culture-topics.md")
     GROWTH_MATERIAL_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/growth-material.json")
     GROWTH_MATERIAL_PROMPT_PRESSURE = 0.8
 
@@ -721,6 +724,81 @@ class DriveEngine:
             "carry_to_tomorrow_without_debt": True,
             "avoid_recent_repeats": True,
         }
+        current = self._ensure_evening_culture_current_topic(now_dt=now_dt)
+        if current:
+            drive.source_data["evening_culture"].update({
+                "current_topic_id": current.get("id"),
+                "current_topic": current.get("title"),
+                "offered_at": current.get("offered_at"),
+                "status": current.get("status"),
+            })
+            drive.source_data["message"] = f"{message} Current offered topic: {current.get('title')}"
+
+    @staticmethod
+    def _extract_evening_culture_candidates(text: str) -> List[str]:
+        """Return candidate topic titles from the 'Кандидаты' section."""
+        in_candidates = False
+        candidates: List[str] = []
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if line.startswith("## "):
+                in_candidates = line == "## Кандидаты"
+                continue
+            if not in_candidates or not line.startswith("- "):
+                continue
+            title = line[2:].split(":", 1)[0].strip()
+            if title:
+                candidates.append(title)
+        return candidates
+
+    def _select_evening_culture_candidate(self) -> Optional[str]:
+        """Pick the first fresh evening-culture topic from the curated shelf."""
+        try:
+            text = self.EVENING_CULTURE_TOPICS_PATH.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        candidates = self._extract_evening_culture_candidates(text)
+        return candidates[0] if candidates else None
+
+    def _read_evening_culture_current(self) -> Optional[dict]:
+        try:
+            data = json.loads(self.EVENING_CULTURE_CURRENT_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _write_evening_culture_current(self, data: dict):
+        self.EVENING_CULTURE_CURRENT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self.EVENING_CULTURE_CURRENT_PATH.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        self._source_cache.pop(str(self.EVENING_CULTURE_CURRENT_PATH), None)
+
+    def _ensure_evening_culture_current_topic(self, *, now_dt: datetime | None = None) -> Optional[dict]:
+        """Persist the currently offered evening topic until it is discussed or rotated.
+
+        This keeps Pulse from selecting a fresh topic on every successful turn:
+        success means the invitation was delivered, not that Lisa necessarily saw
+        or discussed it. The current topic remains explicit for tomorrow carry.
+        """
+        now_dt = now_dt or datetime.now()
+        current = self._read_evening_culture_current()
+        if current and current.get("status") in {"offered", "carried"} and current.get("title"):
+            return current
+
+        title = self._select_evening_culture_candidate()
+        if not title:
+            return None
+        current = {
+            "id": self._topic_slug(title),
+            "title": title,
+            "status": "offered",
+            "offered_at": now_dt.isoformat(timespec="seconds"),
+            "source": str(self.EVENING_CULTURE_TOPICS_PATH),
+        }
+        self._write_evening_culture_current(current)
+        return current
 
     def _read_cached_text(self, path: Path) -> tuple[Optional[str], bool]:
         _ABSENT = -1.0
@@ -908,6 +986,11 @@ class DriveEngine:
                 f"Drives decayed after successful turn. "
                 f"Top drive '{decision.top_drive.name}' addressed."
             )
+
+    @staticmethod
+    def _topic_slug(title: str) -> str:
+        """Stable lightweight id for an evening-culture topic title."""
+        return re.sub(r"[^\wа-яА-ЯёЁ]+", "-", title.lower()).strip("-")
 
     def on_trigger_failure(self, decision):
         """Called after a failed trigger. Boost frustration."""
