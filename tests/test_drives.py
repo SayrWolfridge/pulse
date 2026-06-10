@@ -179,15 +179,25 @@ class TestEveningCultureDrive:
         assert drive.pressure == 0.0
         assert "evening_culture" not in drive.source_data
 
-    def test_discussed_today_suppresses_until_tomorrow(self, tmp_path):
+    def test_discussed_topic_rotates_to_next_candidate(self, tmp_path):
         engine = self._make_engine()
         drive_name = DriveEngine.EVENING_CULTURE_DRIVE
+        topics_path = tmp_path / "evening-culture-topics.md"
         current_path = tmp_path / "evening-culture-current.json"
+        topics_path.write_text(
+            "# Evening culture topics\n\n"
+            "## Уже были\n\n"
+            "- Антигона — обсуждали 2026-06-07\n\n"
+            "## Кандидаты\n\n"
+            "- Прометей: дар огня\n",
+            encoding="utf-8",
+        )
         current_path.write_text(
             '{"id":"antigona","title":"Антигона","status":"discussed",'
             '"offered_at":"2026-05-26T17:30:00"}',
             encoding="utf-8",
         )
+        engine.EVENING_CULTURE_TOPICS_PATH = topics_path
         engine.EVENING_CULTURE_CURRENT_PATH = current_path
         engine.drives[drive_name] = Drive(
             name=drive_name,
@@ -200,8 +210,11 @@ class TestEveningCultureDrive:
             now_dt=datetime(2026, 5, 26, 20, 0),
         )
 
-        assert engine.drives[drive_name].pressure == 0.0
-        assert "evening_culture" not in engine.drives[drive_name].source_data
+        assert engine.drives[drive_name].pressure > 0.0
+        data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
+        assert data["title"] == "Прометей"
+        assert data["status"] == "offered"
+        assert engine.drives[drive_name].source_data["evening_culture"]["current_topic"] == "Прометей"
 
     def test_evening_culture_persists_current_topic(self, tmp_path):
         engine = self._make_engine()

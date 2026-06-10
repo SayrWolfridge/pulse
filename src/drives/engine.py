@@ -691,11 +691,6 @@ class DriveEngine:
             return
 
         current = self._ensure_evening_culture_current_topic(now_dt=now_dt)
-        if current and current.get("status") == "discussed":
-            drive.pressure = 0.0
-            drive.source_data.pop("message", None)
-            drive.source_data.pop("evening_culture", None)
-            return
 
         # Grow slowly enough to feel like a desire, not a siren. With the
         # current default 30s loop this is +0.01/tick, capped below the normal
@@ -803,7 +798,7 @@ class DriveEngine:
         """
         now_dt = now_dt or datetime.now()
         current = self._read_evening_culture_current()
-        if current and current.get("status") in {"offered", "carried", "discussed"} and current.get("title"):
+        if current and current.get("status") in {"offered", "carried"} and current.get("title"):
             return current
 
         title = self._select_evening_culture_candidate()
