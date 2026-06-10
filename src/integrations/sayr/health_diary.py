@@ -701,10 +701,8 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         return candidates[0]
 
     def _build_sayr_thoughts_consolidation_block(self, item: dict) -> str:
-        topic = item.get("topic") or "unnamed topic"
-        status = item.get("status") or "unknown"
-        target_file = item.get("file") or "INDEX.md"
-        result_sink = item.get("result_sink") or str(self.SAYR_THOUGHTS_INDEX)
+        # The item here is a container for the consolidation process, not a topic for reflection.
+        # We do NOT expose topic/status/target_file as part of the visible contract.
         notes = item.get("notes") or ""
         return "\n".join([
             "Sayr-thoughts consolidation contract:",
@@ -712,14 +710,11 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
             f"- protocol: read {self.SAYR_THOUGHTS_PROTOCOL}",
             f"- current_index: read {self.SAYR_THOUGHTS_INDEX}",
             f"- process_doc: read {self.SAYR_THOUGHTS_PROCESS}",
-            f"- topic: {topic}",
-            f"- current_status: {status}",
-            f"- target_file: {target_file}",
-            f"- notes: {notes}",
-            "- allowed_next_step: exactly one small step from the protocol: intake-sweep OR extract 3-7 theses OR add one short draft fragment OR update INDEX status/sources",
+            "- what_this_is_not: this is not a request to write another reflection on a blog topic; consolidation is maintenance of the topic-garden (topics.md, topic-map.json, blog-index)",
+            "- allowed_next_step: exactly one small step from the protocol: dedupe/merge topics OR update INDEX status/sources OR add new roots from memory tails",
             "- required_boundary: do not process the whole blog, do not broad-search all memory, do not delete or rewrite source drafts",
             "- completion_bookkeeping: do not mark this permanent process resolved; only leave the concrete file/index updated or no-op if no safe small step exists",
-            f"- result_sink: {result_sink}",
+            f"- result_sink: {self.SAYR_THOUGHTS_INDEX}",
             "- stop_condition: after one small step, stop and report only the concrete step/no-op",
             "- visible_reply: if Lisa did not ask for details, keep it short and do not turn the process into a task lecture",
         ])
