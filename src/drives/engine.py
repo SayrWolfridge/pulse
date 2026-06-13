@@ -88,6 +88,7 @@ class DriveEngine:
     EVENING_CULTURE_CURRENT_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/evening-culture-current.json")
     EVENING_CULTURE_TOPICS_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/evening-culture-topics.md")
     EVENING_CULTURE_REMINDER_INTERVAL_SECONDS = 90 * 60
+    EVENING_CULTURE_TERMINAL_STATUSES = {"completed", "discussed", "done"}
     GROWTH_MATERIAL_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/growth-material.json")
     GROWTH_MATERIAL_PROMPT_PRESSURE = 0.8
 
@@ -690,6 +691,13 @@ class DriveEngine:
             drive.source_data.pop("evening_culture", None)
             return
 
+        existing_current = self._read_evening_culture_current()
+        if self._is_evening_culture_terminal(existing_current):
+            drive.pressure = 0.0
+            drive.source_data.pop("message", None)
+            drive.source_data.pop("evening_culture", None)
+            return
+
         current = self._ensure_evening_culture_current_topic(now_dt=now_dt)
 
         # Grow slowly enough to feel like a desire, not a siren. With the
@@ -756,6 +764,23 @@ class DriveEngine:
                 candidates.append(title)
         return candidates
 
+    @staticmethod
+    def _extract_evening_culture_seen_titles(text: str) -> set[str]:
+        """Return topic titles already recorded in the 'Уже были' section."""
+        in_seen = False
+        seen: set[str] = set()
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if line.startswith("## "):
+                in_seen = line == "## Уже были"
+                continue
+            if not in_seen or not line.startswith("- "):
+                continue
+            title = line[2:].split("—", 1)[0].split(":", 1)[0].strip()
+            if title:
+                seen.add(title.casefold())
+        return seen
+
     def _select_evening_culture_candidate(self) -> Optional[str]:
         """Pick the first fresh evening-culture topic from the curated shelf."""
         try:
@@ -763,7 +788,11 @@ class DriveEngine:
         except OSError:
             return None
         candidates = self._extract_evening_culture_candidates(text)
-        return candidates[0] if candidates else None
+        seen = self._extract_evening_culture_seen_titles(text)
+        for candidate in candidates:
+            if candidate.casefold() not in seen:
+                return candidate
+        return None
 
     def _read_evening_culture_current(self) -> Optional[dict]:
         try:
@@ -771,6 +800,13 @@ class DriveEngine:
         except Exception:
             return None
         return data if isinstance(data, dict) else None
+
+    def _is_evening_culture_terminal(self, current: Optional[dict]) -> bool:
+        return bool(
+            current
+            and str(current.get("status", "")).lower()
+            in self.EVENING_CULTURE_TERMINAL_STATUSES
+        )
 
     @staticmethod
     def _parse_iso_datetime(value: Any) -> Optional[datetime]:
@@ -798,6 +834,8 @@ class DriveEngine:
         """
         now_dt = now_dt or datetime.now()
         current = self._read_evening_culture_current()
+        if self._is_evening_culture_terminal(current):
+            return None
         if current and current.get("status") in {"offered", "carried"} and current.get("title"):
             return current
 
@@ -833,6 +871,8 @@ class DriveEngine:
         now_dt = now_dt or datetime.now()
         current = self._read_evening_culture_current()
         if not current or not current.get("title"):
+            return False
+        if self._is_evening_culture_terminal(current):
             return False
         current["status"] = "offered"
         current["last_reminded_at"] = now_dt.isoformat(timespec="seconds")

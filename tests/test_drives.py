@@ -179,7 +179,7 @@ class TestEveningCultureDrive:
         assert drive.pressure == 0.0
         assert "evening_culture" not in drive.source_data
 
-    def test_discussed_topic_rotates_to_next_candidate(self, tmp_path):
+    def test_completed_topic_clears_pressure_without_rotating(self, tmp_path):
         engine = self._make_engine()
         drive_name = DriveEngine.EVENING_CULTURE_DRIVE
         topics_path = tmp_path / "evening-culture-topics.md"
@@ -193,7 +193,7 @@ class TestEveningCultureDrive:
             encoding="utf-8",
         )
         current_path.write_text(
-            '{"id":"antigona","title":"Антигона","status":"discussed",'
+            '{"id":"antigona","title":"Антигона","status":"completed",'
             '"offered_at":"2026-05-26T17:30:00"}',
             encoding="utf-8",
         )
@@ -210,11 +210,36 @@ class TestEveningCultureDrive:
             now_dt=datetime(2026, 5, 26, 20, 0),
         )
 
-        assert engine.drives[drive_name].pressure > 0.0
+        assert engine.drives[drive_name].pressure == 0.0
         data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
-        assert data["title"] == "Прометей"
+        assert data["title"] == "Антигона"
+        assert data["status"] == "completed"
+        assert "evening_culture" not in engine.drives[drive_name].source_data
+
+    def test_evening_culture_skips_seen_candidates(self, tmp_path):
+        engine = self._make_engine()
+        topics_path = tmp_path / "evening-culture-topics.md"
+        current_path = tmp_path / "evening-culture-current.json"
+        topics_path.write_text(
+            "# Evening culture topics\n\n"
+            "## Уже были\n\n"
+            "- Мария Магдалина — обсуждали 2026-06-13\n\n"
+            "## Кандидаты\n\n"
+            "- Мария Магдалина: свидетельница\n"
+            "- Экклезиаст: усталость от смысла\n",
+            encoding="utf-8",
+        )
+        engine.EVENING_CULTURE_TOPICS_PATH = topics_path
+        engine.EVENING_CULTURE_CURRENT_PATH = current_path
+
+        engine._refresh_evening_culture_drive(
+            dt=60.0,
+            now_dt=datetime(2026, 6, 13, 20, 0),
+        )
+
+        data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
+        assert data["title"] == "Экклезиаст"
         assert data["status"] == "offered"
-        assert engine.drives[drive_name].source_data["evening_culture"]["current_topic"] == "Прометей"
 
     def test_evening_culture_persists_current_topic(self, tmp_path):
         engine = self._make_engine()
@@ -316,6 +341,32 @@ class TestEveningCultureDrive:
         data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
         assert data["status"] == "offered"
         assert "last_reminded_at" in data
+        assert engine.drives[DriveEngine.EVENING_CULTURE_DRIVE].pressure == 0.0
+
+    def test_evening_culture_success_does_not_reopen_completed_topic(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        engine = self._make_engine()
+        current_path = tmp_path / "evening-culture-current.json"
+        current_path.write_text(
+            '{"id":"antigona","title":"Антигона","status":"completed",'
+            '"offered_at":"2026-06-06T17:30:00"}',
+            encoding="utf-8",
+        )
+        engine.EVENING_CULTURE_CURRENT_PATH = current_path
+        drive = engine.drives[DriveEngine.EVENING_CULTURE_DRIVE] = Drive(
+            name=DriveEngine.EVENING_CULTURE_DRIVE,
+            category=DriveEngine.EVENING_CULTURE_DRIVE,
+            pressure=0.9,
+        )
+        decision = MagicMock()
+        decision.total_pressure = 0.9
+        decision.top_drive = drive
+
+        engine.on_trigger_success(decision)
+
+        data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
+        assert data["status"] == "completed"
         assert engine.drives[DriveEngine.EVENING_CULTURE_DRIVE].pressure == 0.0
 
     def test_evening_culture_carries_after_midnight(self, tmp_path):
