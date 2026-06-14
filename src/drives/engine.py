@@ -89,7 +89,7 @@ class DriveEngine:
     EVENING_CULTURE_CURRENT_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/evening-culture-current.json")
     EVENING_CULTURE_TOPICS_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/evening-culture-topics.md")
     EVENING_CULTURE_REMINDER_INTERVAL_SECONDS = 90 * 60
-    EVENING_CULTURE_TERMINAL_STATUSES = {"completed", "discussed", "done"}
+    EVENING_CULTURE_TERMINAL_STATUSES = {"completed", "discussed", "discussing", "done"}
     GROWTH_MATERIAL_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/growth-material.json")
     GROWTH_MATERIAL_PROMPT_PRESSURE = 0.8
 
@@ -782,11 +782,16 @@ class DriveEngine:
                 seen.add(title.casefold())
         return seen
 
+    def _read_evening_culture_topics_text(self) -> Optional[str]:
+        try:
+            return self.EVENING_CULTURE_TOPICS_PATH.read_text(encoding="utf-8")
+        except OSError:
+            return None
+
     def _select_evening_culture_candidate(self) -> Optional[str]:
         """Pick the first fresh evening-culture topic from the curated shelf."""
-        try:
-            text = self.EVENING_CULTURE_TOPICS_PATH.read_text(encoding="utf-8")
-        except OSError:
+        text = self._read_evening_culture_topics_text()
+        if text is None:
             return None
         candidates = self._extract_evening_culture_candidates(text)
         seen = self._extract_evening_culture_seen_titles(text)
@@ -794,6 +799,12 @@ class DriveEngine:
             if candidate.casefold() not in seen:
                 return candidate
         return None
+
+    def _is_evening_culture_seen_title(self, title: Any) -> bool:
+        text = self._read_evening_culture_topics_text()
+        if text is None:
+            return False
+        return str(title).casefold() in self._extract_evening_culture_seen_titles(text)
 
     def _read_evening_culture_current(self) -> Optional[dict]:
         try:
@@ -837,8 +848,13 @@ class DriveEngine:
         current = self._read_evening_culture_current()
         if self._is_evening_culture_terminal(current):
             return None
-        if current and current.get("status") in {"offered", "carried"} and current.get("title"):
-            return current
+        if current and current.get("status") in {"offered", "carried", "discussing"} and current.get("title"):
+            if not self._is_evening_culture_seen_title(current.get("title")):
+                return current
+            current["status"] = "discussed"
+            current["closed_reason"] = "topic already present in evening-culture 'Уже были'"
+            current["closed_at"] = now_dt.isoformat(timespec="seconds")
+            self._write_evening_culture_current(current)
 
         title = self._select_evening_culture_candidate()
         if not title:
