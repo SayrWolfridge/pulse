@@ -14,6 +14,7 @@ This is the synthetic equivalent of "wanting to do something."
 import json
 import logging
 import re
+import subprocess
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, time as datetime_time, timedelta
@@ -945,12 +946,69 @@ class DriveEngine:
             return value is not None
         return False
 
+    def _refresh_health_state_bridge(self, workspace_root: Path) -> bool:
+        """Refresh pulse/self/health-state.json from today's diary before scoring.
+
+        The diary can be edited directly as plain Markdown, bypassing the
+        health-diary update script.  Refresh here so Pulse does not score health
+        from stale state.  On failure, surface a repair signal instead of using
+        old state as if it were valid.
+        """
+        bridge_path = workspace_root / "scripts/health-diary-health-state-bridge.mjs"
+        if not bridge_path.exists():
+            logger.warning("Health-state bridge missing: %s", bridge_path)
+            return False
+
+        try:
+            subprocess.run(
+                ["node", str(bridge_path)],
+                cwd=str(workspace_root),
+                text=True,
+                capture_output=True,
+                timeout=30,
+                check=True,
+            )
+            # The bridge rewrites health-state.json; cached mtime checks will
+            # pick up the new file on the next read.
+            return True
+        except Exception as exc:
+            logger.warning("Health-state bridge refresh failed: %s", exc)
+            return False
+
+    def _signal_health_state_bridge_failure(self):
+        if "health" not in self.drives:
+            self.drives["health"] = Drive(name="health", category="health", weight=0.7)
+        drive = self.drives["health"]
+        drive.spike(0.5, self.config.drives.max_pressure)
+        drive.source_data["message"] = (
+            "health-state refresh failed. Нужно починить bridge и посмотреть "
+            "сегодняшний текстовый дневник: /home/lisa/Obsidian/health_diary/YYYY-MM-DD.md"
+        )
+        drive.source_data["rule_id"] = "health_state_bridge_failed"
+        try:
+            thalamus.append({
+                "source": "health_state",
+                "type": "health_state_bridge_failed",
+                "salience": 0.5,
+                "data": {
+                    "drive": "health",
+                    "message": drive.source_data["message"],
+                },
+            })
+        except Exception as exc:
+            logger.debug("Health-state bridge failure thalamus append failed: %s", exc)
+
     def _refresh_health_rules(self):
         workspace = self.config.workspace
         workspace_root = Path(str(workspace.root)).expanduser()
         rules_path = workspace_root / "pulse/self/health-rules.json"
         state_path = workspace_root / "pulse/self/health-state.json"
         fired_path = Path(self.config.state.dir).expanduser() / "health-rules-fired.json"
+
+        bridge_ok = self._refresh_health_state_bridge(workspace_root)
+        if not bridge_ok:
+            self._signal_health_state_bridge_failure()
+            return
 
         raw_rules, _ = self._read_cached_text(rules_path)
         state_data, _ = self._read_cached_json(state_path)

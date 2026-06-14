@@ -534,6 +534,65 @@ class TestGrowthDrive:
         assert engine.drives["growth"].pressure == 0.0
 
 
+class TestHealthStateBridgeRefresh:
+    def _make_engine(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        cat_health = MagicMock()
+        cat_health.weight = 0.7
+        config = MagicMock()
+        config.workspace.root = str(tmp_path)
+        config.state.dir = str(tmp_path / "state")
+        config.drives.categories = {"health": cat_health}
+        config.drives.max_pressure = 5.0
+        config.drives.success_decay = 0.5
+        config.drives.adaptive_decay = False
+        state = MagicMock()
+        state.get.return_value = {}
+        return DriveEngine(config=config, state=state)
+
+    def test_refresh_health_rules_runs_bridge_before_reading_state(self, tmp_path):
+        engine = self._make_engine(tmp_path)
+        bridge_path = tmp_path / "scripts" / "health-diary-health-state-bridge.mjs"
+        bridge_path.parent.mkdir(parents=True)
+        bridge_path.write_text(
+            "import fs from 'fs';\n"
+            "fs.mkdirSync('pulse/self', { recursive: true });\n"
+            "fs.writeFileSync('pulse/self/health-state.json', JSON.stringify({ date: '2026-06-14', accepted_entries_today: 0 }));\n",
+            encoding="utf-8",
+        )
+        rules_path = tmp_path / "pulse" / "self" / "health-rules.json"
+        rules_path.parent.mkdir(parents=True, exist_ok=True)
+        rules_path.write_text(
+            '{"enabled":true,"rules":[{"id":"no_food","once_per_day":false,'
+            '"conditions":[{"field":"accepted_entries_today","op":"==","value":0}],'
+            '"effect":{"drive":"health","pressure_delta":0.5,"message":"Еды сегодня пока не видно"}}]}',
+            encoding="utf-8",
+        )
+
+        engine._refresh_health_rules()
+
+        assert engine.drives["health"].pressure == 0.5
+        assert engine.drives["health"].source_data["message"] == "Еды сегодня пока не видно"
+
+    def test_refresh_health_rules_signals_failure_without_old_state(self, tmp_path):
+        engine = self._make_engine(tmp_path)
+        bridge_path = tmp_path / "scripts" / "health-diary-health-state-bridge.mjs"
+        bridge_path.parent.mkdir(parents=True)
+        bridge_path.write_text("process.exit(2);\n", encoding="utf-8")
+        rules_path = tmp_path / "pulse" / "self" / "health-rules.json"
+        rules_path.parent.mkdir(parents=True, exist_ok=True)
+        rules_path.write_text('{"enabled":true,"rules":[]}', encoding="utf-8")
+        state_path = tmp_path / "pulse" / "self" / "health-state.json"
+        state_path.write_text('{"date":"2026-06-10","accepted_entries_today":0}', encoding="utf-8")
+
+        engine._refresh_health_rules()
+
+        assert engine.drives["health"].pressure == 0.5
+        assert engine.drives["health"].source_data["rule_id"] == "health_state_bridge_failed"
+        assert "сегодняшний текстовый дневник" in engine.drives["health"].source_data["message"]
+
+
 class TestDriveEngineWeightDrift:
     """Regression tests for exponential weight drift bug (fixed March 2026).
 
