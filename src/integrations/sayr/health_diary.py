@@ -314,6 +314,32 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         def after(hh: int, mm: int = 0) -> bool:
             return current_hhmm >= hh * 100 + mm
 
+        def minutes_since_hhmm(value: object) -> int | None:
+            if not isinstance(value, str):
+                return None
+            match = re.fullmatch(r"(\d{1,2}):(\d{2})", value.strip())
+            if not match:
+                return None
+            hour = int(match.group(1))
+            minute = int(match.group(2))
+            if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+                return None
+            event_minutes = hour * 60 + minute
+            now_minutes = now.hour * 60 + now.minute
+            delta = now_minutes - event_minutes
+            if delta < 0:
+                delta += 24 * 60
+            return delta
+
+        def recent_food_within(minutes: int) -> bool:
+            for event in data.get("debug_events") or []:
+                if not isinstance(event, dict) or not event.get("hasFood"):
+                    continue
+                delta = minutes_since_hhmm(event.get("time"))
+                if delta is not None and delta < minutes:
+                    return True
+            return False
+
         lines = []
         food_lines = []
         food_grace_active = bool(data.get("food_grace_active"))
@@ -325,7 +351,13 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
             isinstance(minutes_since_last_coffee, (int, float))
             and minutes_since_last_coffee < 120
         )
-        food_context_grace_active = food_grace_active or meal_grace_active or coffee_food_grace_active
+        recent_food_grace_active = recent_food_within(120)
+        food_context_grace_active = (
+            food_grace_active
+            or meal_grace_active
+            or coffee_food_grace_active
+            or recent_food_grace_active
+        )
         if food_context_grace_active:
             pass
         elif after(10) and not data.get("has_real_food_today", True):
