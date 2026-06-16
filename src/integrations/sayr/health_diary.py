@@ -320,12 +320,18 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         food_grace_until = data.get("food_grace_until")
         meal_grace_active = bool(data.get("meal_grace_active"))
         meal_grace_until = data.get("meal_grace_until")
-        if food_grace_active or meal_grace_active:
+        minutes_since_last_coffee = data.get("minutes_since_last_coffee")
+        coffee_food_grace_active = (
+            isinstance(minutes_since_last_coffee, (int, float))
+            and minutes_since_last_coffee < 120
+        )
+        food_context_grace_active = food_grace_active or meal_grace_active or coffee_food_grace_active
+        if food_context_grace_active:
             pass
         elif after(10) and not data.get("has_real_food_today", True):
             food_lines.append("- Еды сегодня пока не видно")
         meals = data.get("meals_substantial")
-        if not food_grace_active and not meal_grace_active and after(15) and isinstance(meals, int) and meals < 2:
+        if not food_context_grace_active and after(15) and isinstance(meals, int) and meals < 2:
             food_lines.append(f"- Нормальных приёмов пищи пока: {meals}")
 
         if food_lines:
