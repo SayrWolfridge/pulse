@@ -89,7 +89,8 @@ class DriveEngine:
     EVENING_CULTURE_CURRENT_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/evening-culture-current.json")
     EVENING_CULTURE_TOPICS_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/evening-culture-topics.md")
     EVENING_CULTURE_REMINDER_INTERVAL_SECONDS = 90 * 60
-    EVENING_CULTURE_TERMINAL_STATUSES = {"completed", "discussed", "discussing", "done"}
+    EVENING_CULTURE_STALE_DISCUSSING_SECONDS = 24 * 60 * 60
+    EVENING_CULTURE_TERMINAL_STATUSES = {"completed", "discussed", "done"}
     GROWTH_MATERIAL_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/growth-material.json")
     GROWTH_MATERIAL_PROMPT_PRESSURE = 0.8
 
@@ -698,6 +699,15 @@ class DriveEngine:
             drive.source_data.pop("message", None)
             drive.source_data.pop("evening_culture", None)
             return
+        if (
+            existing_current
+            and str(existing_current.get("status", "")).lower() == "discussing"
+            and not self._is_evening_culture_stale_discussing(existing_current, now_dt=now_dt)
+        ):
+            drive.pressure = 0.0
+            drive.source_data.pop("message", None)
+            drive.source_data.pop("evening_culture", None)
+            return
 
         current = self._ensure_evening_culture_current_topic(now_dt=now_dt)
 
@@ -743,10 +753,22 @@ class DriveEngine:
                 "reminder_interval_minutes": int(self.EVENING_CULTURE_REMINDER_INTERVAL_SECONDS / 60),
                 "status": current.get("status"),
             })
-            drive.source_data["message"] = (
-                f"{message} Current offered topic: {current.get('title')}. "
-                "If this is a reminder, make it one tiny warm reminder, not a new topic."
-            )
+            if self._is_evening_culture_stale_discussing(current, now_dt=now_dt):
+                drive.source_data["evening_culture"].update({
+                    "stale_discussing": True,
+                    "stale_after_hours": int(self.EVENING_CULTURE_STALE_DISCUSSING_SECONDS / 3600),
+                    "action": "check memory/day notes; close as already discussed, carry, or ask Lisa whether to take it today",
+                })
+                drive.source_data["message"] = (
+                    f"{message} Current topic {current.get('title')} is stuck in discussing for over "
+                    "24h. Bring this up gently: check whether it was already discussed; "
+                    "if yes, close it and add it to 'Уже были'; if not, ask Lisa whether to close, carry, or take it today."
+                )
+            else:
+                drive.source_data["message"] = (
+                    f"{message} Current offered topic: {current.get('title')}. "
+                    "If this is a reminder, make it one tiny warm reminder, not a new topic."
+                )
 
     @staticmethod
     def _extract_evening_culture_candidates(text: str) -> List[str]:
@@ -819,6 +841,25 @@ class DriveEngine:
             and str(current.get("status", "")).lower()
             in self.EVENING_CULTURE_TERMINAL_STATUSES
         )
+
+    def _is_evening_culture_stale_discussing(self, current: Optional[dict], *, now_dt: datetime) -> bool:
+        if not current or str(current.get("status", "")).lower() != "discussing":
+            return False
+        anchors = (
+            current.get("last_discussed_at"),
+            current.get("started_discussing_at"),
+            current.get("offered_at"),
+        )
+        for value in anchors:
+            anchor = self._parse_iso_datetime(value)
+            if anchor is None:
+                continue
+            if anchor.tzinfo is not None and now_dt.tzinfo is None:
+                anchor = anchor.replace(tzinfo=None)
+            elif anchor.tzinfo is None and now_dt.tzinfo is not None:
+                now_dt = now_dt.replace(tzinfo=None)
+            return (now_dt - anchor).total_seconds() >= self.EVENING_CULTURE_STALE_DISCUSSING_SECONDS
+        return True
 
     @staticmethod
     def _parse_iso_datetime(value: Any) -> Optional[datetime]:

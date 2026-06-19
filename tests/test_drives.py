@@ -325,7 +325,7 @@ class TestEveningCultureDrive:
         assert data["title"] == "Дон Кихот"
         assert data["status"] == "offered"
 
-    def test_evening_culture_discussing_status_suppresses_pressure(self, tmp_path):
+    def test_evening_culture_fresh_discussing_status_suppresses_pressure(self, tmp_path):
         engine = self._make_engine()
         topics_path = tmp_path / "evening-culture-topics.md"
         current_path = tmp_path / "evening-culture-current.json"
@@ -347,6 +347,34 @@ class TestEveningCultureDrive:
         drive = engine.drives[DriveEngine.EVENING_CULTURE_DRIVE]
         assert drive.pressure == 0.0
         assert "evening_culture" not in drive.source_data
+
+    def test_evening_culture_stale_discussing_status_grows_pressure(self, tmp_path):
+        engine = self._make_engine()
+        topics_path = tmp_path / "evening-culture-topics.md"
+        current_path = tmp_path / "evening-culture-current.json"
+        topics_path.write_text("## Кандидаты\n\n- Дон Кихот: достоинство\n", encoding="utf-8")
+        current_path.write_text(
+            '{"id":"don-kihot","title":"Дон Кихот","status":"discussing",'
+            '"offered_at":"2026-06-14T19:06:00",'
+            '"started_discussing_at":"2026-06-14T19:17:00",'
+            '"last_discussed_at":"2026-06-14T20:30:00"}',
+            encoding="utf-8",
+        )
+        engine.EVENING_CULTURE_TOPICS_PATH = topics_path
+        engine.EVENING_CULTURE_CURRENT_PATH = current_path
+
+        engine._refresh_evening_culture_drive(
+            dt=60.0,
+            now_dt=datetime(2026, 6, 15, 20, 31),
+        )
+
+        drive = engine.drives[DriveEngine.EVENING_CULTURE_DRIVE]
+        assert drive.pressure > 0.0
+        source = drive.source_data["evening_culture"]
+        assert source["current_topic"] == "Дон Кихот"
+        assert source["status"] == "discussing"
+        assert source["stale_discussing"] is True
+        assert "stuck in discussing" in drive.source_data["message"]
 
     def test_evening_culture_reminder_waits_for_interval(self, tmp_path):
         engine = self._make_engine()
