@@ -565,6 +565,12 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
     def _curiosity_preflight(self, *, record_trace: bool = False) -> dict:
         item = self._open_curiosity_question()
         if item:
+            if item.get("mode") == "sayr_thoughts_consolidation":
+                return {
+                    "action": "sayr_thoughts_consolidation",
+                    "reason": f"open sayr-thoughts consolidation question: {item.get('id') or item.get('title') or item.get('text')}",
+                    "object": item,
+                }
             return {
                 "action": "bounded_curiosity_reflection",
                 "reason": f"open curiosity question: {item.get('id') or item.get('title') or item.get('text')}",
@@ -739,21 +745,22 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         return candidates[0]
 
     def _build_sayr_thoughts_consolidation_block(self, item: dict) -> str:
-        # The item here is a container for the consolidation process, not a topic for reflection.
-        # We do NOT expose topic/status/target_file as part of the visible contract.
-        notes = item.get("notes") or ""
+        topic = item.get("topic") or item.get("text") or item.get("title") or "one blog topic"
+        target = item.get("result_sink") or item.get("current_index") or str(self.SAYR_THOUGHTS_INDEX)
         return "\n".join([
             "Sayr-thoughts consolidation contract:",
             "- process: permanent curiosity process; never treat it as fully done just because one turn ran",
+            f"- object: curiosity consolidation route — {topic}",
             f"- protocol: read {self.SAYR_THOUGHTS_PROTOCOL}",
+            f"- garden_table_doc: read {self.SAYR_THOUGHTS_INDEX.parent / 'GARDEN-TABLE.md'}",
             f"- current_index: read {self.SAYR_THOUGHTS_INDEX}",
             f"- process_doc: read {self.SAYR_THOUGHTS_PROCESS}",
-            "- what_this_is_not: this is not a request to write another reflection on a blog topic; consolidation is maintenance of the topic-garden (topics.md, topic-map.json, blog-index)",
-            "- allowed_next_step: exactly one small step from the protocol: dedupe/merge topics OR update INDEX status/sources OR add new roots from memory tails",
-            "- required_boundary: do not process the whole blog, do not broad-search all memory, do not delete or rewrite source drafts",
-            "- completion_bookkeeping: do not mark this permanent process resolved; only leave the concrete file/index updated or no-op if no safe small step exists",
-            f"- result_sink: {self.SAYR_THOUGHTS_INDEX}",
-            "- stop_condition: after one small step, stop and report only the concrete step/no-op",
+            "- what_this_is_not: this is not a request to write another reflection on a blog topic; consolidation is maintenance through the garden table",
+            "- allowed_next_step: exactly one bounded garden-table action: scan OR shelf for one topic OR assemble one garden draft OR manually proofread one draft OR update INDEX for one topic OR no-op if no safe small step exists",
+            "- required_boundary: one_topic_one_shelf_one_artifact; do not process the whole blog, do not broad-search all memory, do not delete or rewrite source drafts",
+            "- completion_bookkeeping: do not mark this permanent process resolved after one pass; only leave the concrete file/index updated or no-op if no safe small step exists",
+            f"- result_sink: {target}",
+            "- stop_condition: after one bounded garden-table step, stop and report only the concrete step/no-op",
             "- visible_reply: if Lisa did not ask for details, keep it short and do not turn the process into a task lecture",
         ])
 
