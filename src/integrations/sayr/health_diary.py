@@ -207,7 +207,28 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
 
         return None
 
+    def _build_trigger_header_without_drive_protocol(self, decision, config) -> str:
+        prefix = config.openclaw.message_prefix
+        parts = [
+            f"{prefix} Self-initiated turn.",
+            f"Trigger reason: {decision.reason}",
+        ]
+        if decision.top_drive:
+            parts.append(
+                f"Top drive: {decision.top_drive.name} "
+                f"(pressure: {decision.top_drive_pressure_snapshot:.2f})"
+            )
+        else:
+            parts.append(f"Total pressure: {decision.total_pressure:.2f}")
+        return "\n".join(parts)
+
     def build_trigger_message(self, decision, config) -> str:
+        if decision.top_drive and decision.top_drive.name == "emotions":
+            block = self._build_emotions_block()
+            if block:
+                base = self._build_trigger_header_without_drive_protocol(decision, config)
+                return f"{base}\n\nEMOTIONAL LANDSCAPE\n{block}"
+
         base = super().build_trigger_message(decision, config)
         if not decision.top_drive:
             return base
@@ -565,12 +586,6 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
     def _curiosity_preflight(self, *, record_trace: bool = False) -> dict:
         item = self._open_curiosity_question()
         if item:
-            if item.get("mode") == "sayr_thoughts_consolidation":
-                return {
-                    "action": "sayr_thoughts_consolidation",
-                    "reason": f"open sayr-thoughts consolidation question: {item.get('id') or item.get('title') or item.get('text')}",
-                    "object": item,
-                }
             return {
                 "action": "bounded_curiosity_reflection",
                 "reason": f"open curiosity question: {item.get('id') or item.get('title') or item.get('text')}",

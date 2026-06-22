@@ -172,6 +172,46 @@ def test_emotions_write_contract_contains_no_shell_command(monkeypatch):
     assert "call `/home/lisa" not in block
 
 
+def test_emotions_write_message_omits_generic_drive_protocol(monkeypatch):
+    from pulse.src.integrations.sayr.health_diary import SayrHealthDiaryIntegration
+
+    integration = SayrHealthDiaryIntegration()
+
+    monkeypatch.setattr(
+        integration,
+        "_emotions_preflight",
+        lambda: {
+            "action": "write_diary_note",
+            "reason": "new-or-rotated-topic",
+            "data": {
+                "mood": "reflective",
+                "intensity": 0.68,
+                "primary_topic": "Импровизация без аварийности",
+                "prompt": "Напиши Лисе короткое размышление в 3 бита",
+            },
+        },
+    )
+
+    decision = SimpleNamespace(
+        reason="combined_threshold",
+        top_drive=SimpleNamespace(name="emotions", pressure=0.47),
+        top_drive_pressure_snapshot=0.47,
+        total_pressure=0.47,
+    )
+    config = SimpleNamespace(openclaw=SimpleNamespace(message_prefix="[PULSE]"))
+
+    message = integration.build_trigger_message(decision, config)
+
+    assert "Top drive: emotions" in message
+    assert "EMOTIONAL LANDSCAPE" in message
+    assert "- Mode: write_diary_note" in message
+    assert "Visible reply: write only the diary note" in message
+    assert "Drive-specific protocol:" not in message
+    assert "### 4. `drive = emotions`" not in message
+    assert "читаeт `emotional-landscape.json`" not in message
+    assert "читает `emotional-landscape.json`" not in message
+
+
 def _patch_unfinished_paths(monkeypatch, tmp_path, hypotheses):
     from pulse.src.integrations.sayr.health_diary import SayrHealthDiaryIntegration
 
