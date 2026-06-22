@@ -586,6 +586,12 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
     def _curiosity_preflight(self, *, record_trace: bool = False) -> dict:
         item = self._open_curiosity_question()
         if item:
+            if item.get("mode") == "sayr_thoughts_consolidation":
+                return {
+                    "action": "sayr_thoughts_consolidation",
+                    "reason": f"open sayr-thoughts consolidation route: {item.get('id') or item.get('title') or item.get('text')}",
+                    "object": self._sayr_thoughts_consolidation_object() or item,
+                }
             return {
                 "action": "bounded_curiosity_reflection",
                 "reason": f"open curiosity question: {item.get('id') or item.get('title') or item.get('text')}",

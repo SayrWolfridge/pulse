@@ -790,12 +790,14 @@ def test_curiosity_skips_deferred_question_and_uses_next_open_question(monkeypat
     )
 
     verdict = integration._curiosity_preflight(record_trace=True)
-    assert verdict["action"] == "bounded_curiosity_reflection"
+    assert verdict["action"] == "sayr_thoughts_consolidation"
     assert verdict["object"]["id"] == "c3"
 
     block = integration._build_curiosity_block()
-    assert "curiosity question `c3`" in block
-    assert "sayr_thoughts_consolidation" in block
+    assert "Sayr-thoughts consolidation contract" in block
+    assert "curiosity question `c3`" not in block
+    assert "complete-curiosity-question.mjs --id c3 --status resolved" not in block
+    assert "do not mark this permanent process resolved" in block
     assert "curiosity question `c2`" not in block
 
 
