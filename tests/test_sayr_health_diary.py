@@ -801,6 +801,65 @@ def test_curiosity_skips_deferred_question_and_uses_next_open_question(monkeypat
     assert "curiosity question `c2`" not in block
 
 
+def test_curiosity_garden_table_mode_uses_consolidation_contract(monkeypatch, tmp_path):
+    integration = _patch_curiosity_paths(
+        monkeypatch,
+        tmp_path,
+        [
+            {
+                "id": "c3",
+                "text": "Как постепенно систематизировать размышления Сэйра?",
+                "status": "open",
+                "mode": "garden_table_one_bounded_step",
+                "allowed_next_step": "garden_table_one_bounded_step",
+                "protocol": "pulse/sayr-thoughts-consolidation-protocol.md",
+            },
+        ],
+    )
+
+    verdict = integration._curiosity_preflight(record_trace=True)
+    assert verdict["action"] == "sayr_thoughts_consolidation"
+    assert verdict["object"]["id"] == "c3"
+
+    block = integration._build_curiosity_block()
+    assert "Sayr-thoughts consolidation contract" in block
+    assert "one bounded garden-table action" in block
+    assert "Что заметил" not in block
+    assert "bounded reflection" not in block
+    assert "complete-curiosity-question.mjs --id c3 --status resolved" not in block
+
+
+def test_curiosity_trigger_message_omits_generic_drive_protocol_for_consolidation(monkeypatch, tmp_path):
+    integration = _patch_curiosity_paths(
+        monkeypatch,
+        tmp_path,
+        [
+            {
+                "id": "c3",
+                "text": "Как постепенно систематизировать размышления Сэйра?",
+                "status": "open",
+                "mode": "sayr_thoughts_consolidation",
+            },
+        ],
+    )
+    decision = SimpleNamespace(
+        reason="combined_threshold",
+        top_drive=SimpleNamespace(name="curiosity", pressure=0.70),
+        top_drive_pressure_snapshot=0.70,
+        total_pressure=0.70,
+    )
+    config = SimpleNamespace(openclaw=SimpleNamespace(message_prefix="[PULSE]"))
+
+    message = integration.build_trigger_message(decision, config)
+
+    assert "CURIOSITY CONTRACT" in message
+    assert "Sayr-thoughts consolidation contract" in message
+    assert "Drive-specific protocol:" not in message
+    assert "### 3. `drive = curiosity`" not in message
+    assert "Что заметил" not in message
+    assert "complete-curiosity-question.mjs --id c3 --status resolved" not in message
+
+
 def test_curiosity_skips_resolved_questions(monkeypatch, tmp_path):
     integration = _patch_curiosity_paths(
         monkeypatch,

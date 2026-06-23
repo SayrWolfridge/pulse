@@ -229,6 +229,12 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
                 base = self._build_trigger_header_without_drive_protocol(decision, config)
                 return f"{base}\n\nEMOTIONAL LANDSCAPE\n{block}"
 
+        if decision.top_drive and decision.top_drive.name == "curiosity":
+            block = self._build_curiosity_block()
+            if block:
+                base = self._build_trigger_header_without_drive_protocol(decision, config)
+                return f"{base}\n\nCURIOSITY CONTRACT\n{block}"
+
         base = super().build_trigger_message(decision, config)
         if not decision.top_drive:
             return base
@@ -256,12 +262,6 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
             if not block:
                 return base
             return f"{base}\n\nUNFINISHED CONTRACT\n{block}"
-
-        if decision.top_drive.name == "curiosity":
-            block = self._build_curiosity_block()
-            if not block:
-                return base
-            return f"{base}\n\nCURIOSITY CONTRACT\n{block}"
 
         git_action = analyze_git_drive(decision)
         if git_action:
@@ -586,7 +586,7 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
     def _curiosity_preflight(self, *, record_trace: bool = False) -> dict:
         item = self._open_curiosity_question()
         if item:
-            if item.get("mode") == "sayr_thoughts_consolidation":
+            if self._is_sayr_thoughts_consolidation_item(item):
                 return {
                     "action": "sayr_thoughts_consolidation",
                     "reason": f"open sayr-thoughts consolidation route: {item.get('id') or item.get('title') or item.get('text')}",
@@ -645,6 +645,20 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         if not_touch_until is None:
             return False
         return not_touch_until > datetime.now().astimezone()
+
+    def _is_sayr_thoughts_consolidation_item(self, item: dict) -> bool:
+        garden_modes = {
+            "sayr_thoughts_consolidation",
+            "garden_table_one_bounded_step",
+        }
+        values = {
+            str(item.get("mode") or ""),
+            str(item.get("allowed_next_step") or ""),
+            str(item.get("protocol") or ""),
+        }
+        return bool(values & garden_modes) or any(
+            "sayr-thoughts-consolidation-protocol" in value for value in values
+        )
 
     def _record_empty_curiosity_trace(self, reason: str, *, discharge: str | None = None) -> None:
         record = {
