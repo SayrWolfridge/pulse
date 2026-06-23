@@ -858,6 +858,17 @@ class DriveEngine:
                 anchor = anchor.replace(tzinfo=None)
             elif anchor.tzinfo is None and now_dt.tzinfo is not None:
                 now_dt = now_dt.replace(tzinfo=None)
+            # Evening culture should not wait for an exact 24h wall-clock
+            # boundary. If yesterday's discussion is still marked
+            # ``discussing`` when the next evening culture window opens, it is
+            # already stale enough to ask whether to close/carry/continue. The
+            # strict 24h rule made topics discussed late in the evening suppress
+            # the whole next evening and only become actionable after the useful
+            # window had nearly ended.
+            if anchor.date() < now_dt.date() and (
+                (now_dt.hour == 16 and now_dt.minute >= 30) or 17 <= now_dt.hour < 24
+            ):
+                return True
             return (now_dt - anchor).total_seconds() >= self.EVENING_CULTURE_STALE_DISCUSSING_SECONDS
         return True
 

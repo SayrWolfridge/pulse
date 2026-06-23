@@ -179,6 +179,32 @@ class TestEveningCultureDrive:
         assert drive.pressure == 0.0
         assert "evening_culture" not in drive.source_data
 
+    def test_yesterdays_discussing_topic_is_stale_in_next_evening_window(self, tmp_path):
+        engine = self._make_engine()
+        engine.EVENING_CULTURE_TOPICS_PATH = tmp_path / "evening-culture-topics.md"
+        engine.EVENING_CULTURE_CURRENT_PATH = tmp_path / "evening-culture-current.json"
+        engine.EVENING_CULTURE_TOPICS_PATH.write_text(
+            "## Кандидаты\n\n- Прометей: дар огня\n",
+            encoding="utf-8",
+        )
+        engine.EVENING_CULTURE_CURRENT_PATH.write_text(
+            '{"id":"prometei","title":"Прометей","status":"discussing",'
+            '"last_discussed_at":"2026-06-22T22:04:51"}',
+            encoding="utf-8",
+        )
+
+        engine._refresh_evening_culture_drive(
+            dt=60.0,
+            now_dt=datetime(2026, 6, 23, 17, 0),
+        )
+
+        drive = engine.drives[DriveEngine.EVENING_CULTURE_DRIVE]
+        assert drive.pressure > 0.0
+        source = drive.source_data["evening_culture"]
+        assert source["current_status"] == "discussing"
+        assert source["stale_discussing"] is True
+        assert source["current_topic"] == "Прометей"
+
     def test_completed_topic_clears_pressure_without_rotating(self, tmp_path):
         engine = self._make_engine()
         drive_name = DriveEngine.EVENING_CULTURE_DRIVE
