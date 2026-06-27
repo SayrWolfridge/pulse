@@ -695,10 +695,16 @@ class DriveEngine:
 
         existing_current = self._read_evening_culture_current()
         if self._is_evening_culture_terminal(existing_current):
-            drive.pressure = 0.0
-            drive.source_data.pop("message", None)
-            drive.source_data.pop("evening_culture", None)
-            return
+            if self._archive_stale_evening_culture_terminal_current(
+                existing_current,
+                now_dt=now_dt,
+            ):
+                existing_current = self._read_evening_culture_current()
+            else:
+                drive.pressure = 0.0
+                drive.source_data.pop("message", None)
+                drive.source_data.pop("evening_culture", None)
+                return
         if (
             existing_current
             and str(existing_current.get("status", "")).lower() == "discussing"
@@ -752,6 +758,7 @@ class DriveEngine:
                 "last_reminded_at": current.get("last_reminded_at"),
                 "reminder_interval_minutes": int(self.EVENING_CULTURE_REMINDER_INTERVAL_SECONDS / 60),
                 "status": current.get("status"),
+                "current_status": current.get("status"),
             })
             if self._is_evening_culture_stale_discussing(current, now_dt=now_dt):
                 drive.source_data["evening_culture"].update({
@@ -769,6 +776,19 @@ class DriveEngine:
                     f"{message} Current offered topic: {current.get('title')}. "
                     "If this is a reminder, make it one tiny warm reminder, not a new topic."
                 )
+        else:
+            drive.source_data["evening_culture"].update({
+                "status": "no_fresh_candidates",
+                "action": (
+                    "add fresh topics to evening-culture-topics.md or invite a "
+                    "micro-culture thread from the current day"
+                ),
+            })
+            drive.source_data["message"] = (
+                f"{message} No fresh evening culture candidates are available. "
+                "Do not stay silently locked; either add a fresh topic to the "
+                "shelf later or offer one tiny culture thread from the current day."
+            )
 
     @staticmethod
     def _extract_evening_culture_candidates(text: str) -> List[str]:
@@ -841,6 +861,47 @@ class DriveEngine:
             and str(current.get("status", "")).lower()
             in self.EVENING_CULTURE_TERMINAL_STATUSES
         )
+
+    def _archive_stale_evening_culture_terminal_current(
+        self,
+        current: Optional[dict],
+        *,
+        now_dt: datetime,
+    ) -> bool:
+        if not self._is_evening_culture_terminal(current):
+            return False
+        anchors = (
+            current.get("closed_at"),
+            current.get("completed_at"),
+            current.get("last_discussed_at"),
+            current.get("offered_at"),
+        )
+        anchor = None
+        for value in anchors:
+            anchor = self._parse_iso_datetime(value)
+            if anchor is not None:
+                break
+        if anchor is None:
+            return False
+        if anchor.tzinfo is not None and now_dt.tzinfo is None:
+            anchor = anchor.replace(tzinfo=None)
+        elif anchor.tzinfo is None and now_dt.tzinfo is not None:
+            now_dt = now_dt.replace(tzinfo=None)
+        evening_window = (
+            (now_dt.hour == 16 and now_dt.minute >= 30)
+            or 17 <= now_dt.hour < 24
+        )
+        if not evening_window or anchor.date() >= now_dt.date():
+            return False
+        current["previous_terminal_status"] = current.get("status")
+        current["status"] = "archived"
+        current["archived_at"] = now_dt.isoformat(timespec="seconds")
+        current["archived_reason"] = (
+            "previous terminal evening culture topic should not block a new "
+            "evening window"
+        )
+        self._write_evening_culture_current(current)
+        return True
 
     def _is_evening_culture_stale_discussing(self, current: Optional[dict], *, now_dt: datetime) -> bool:
         if not current or str(current.get("status", "")).lower() != "discussing":

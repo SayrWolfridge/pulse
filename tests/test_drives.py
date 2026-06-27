@@ -123,8 +123,14 @@ class TestEveningCultureDrive:
         state.get.return_value = {}
         return DriveEngine(config=config, state=state)
 
-    def test_grows_from_16_30_until_21(self):
+    def test_grows_from_16_30_until_21(self, tmp_path):
         engine = self._make_engine()
+        engine.EVENING_CULTURE_TOPICS_PATH = tmp_path / "evening-culture-topics.md"
+        engine.EVENING_CULTURE_CURRENT_PATH = tmp_path / "evening-culture-current.json"
+        engine.EVENING_CULTURE_TOPICS_PATH.write_text(
+            "## Кандидаты\n\n- Антигона: долг\n",
+            encoding="utf-8",
+        )
         engine._refresh_evening_culture_drive(
             dt=60.0,
             now_dt=datetime(2026, 5, 26, 16, 29),
@@ -207,7 +213,7 @@ class TestEveningCultureDrive:
         assert source["current_topic"] == "Прометей"
 
     @pytest.mark.parametrize("terminal_status", ["completed", "discussed", "done", "closed"])
-    def test_terminal_topic_clears_pressure_without_rotating(self, tmp_path, terminal_status):
+    def test_terminal_topic_clears_pressure_without_rotating_same_day(self, tmp_path, terminal_status):
         engine = self._make_engine()
         drive_name = DriveEngine.EVENING_CULTURE_DRIVE
         topics_path = tmp_path / "evening-culture-topics.md"
@@ -222,7 +228,7 @@ class TestEveningCultureDrive:
         )
         current_path.write_text(
             f'{{"id":"antigona","title":"Антигона","status":"{terminal_status}",'
-            '"offered_at":"2026-05-26T17:30:00"}',
+            '"closed_at":"2026-05-26T17:30:00"}',
             encoding="utf-8",
         )
         engine.EVENING_CULTURE_TOPICS_PATH = topics_path
@@ -243,6 +249,79 @@ class TestEveningCultureDrive:
         assert data["title"] == "Антигона"
         assert data["status"] == terminal_status
         assert "evening_culture" not in engine.drives[drive_name].source_data
+
+    @pytest.mark.parametrize("terminal_status", ["completed", "discussed", "done", "closed"])
+    def test_terminal_topic_archives_on_next_evening_window_and_rotates(
+        self,
+        tmp_path,
+        terminal_status,
+    ):
+        engine = self._make_engine()
+        topics_path = tmp_path / "evening-culture-topics.md"
+        current_path = tmp_path / "evening-culture-current.json"
+        topics_path.write_text(
+            "# Evening culture topics\n\n"
+            "## Уже были\n\n"
+            "- Антигона — обсуждали 2026-06-07\n\n"
+            "## Кандидаты\n\n"
+            "- Антигона: долг\n"
+            "- Прометей: дар огня\n",
+            encoding="utf-8",
+        )
+        current_path.write_text(
+            f'{{"id":"antigona","title":"Антигона","status":"{terminal_status}",'
+            '"closed_at":"2026-05-26T17:30:00"}',
+            encoding="utf-8",
+        )
+        engine.EVENING_CULTURE_TOPICS_PATH = topics_path
+        engine.EVENING_CULTURE_CURRENT_PATH = current_path
+
+        engine._refresh_evening_culture_drive(
+            dt=60.0,
+            now_dt=datetime(2026, 5, 27, 16, 30),
+        )
+
+        drive = engine.drives[DriveEngine.EVENING_CULTURE_DRIVE]
+        data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
+        assert data["title"] == "Прометей"
+        assert data["status"] == "offered"
+        assert drive.pressure > 0.0
+        assert drive.source_data["evening_culture"]["current_topic"] == "Прометей"
+
+    def test_evening_culture_reports_no_fresh_candidates_after_archiving_terminal(
+        self,
+        tmp_path,
+    ):
+        engine = self._make_engine()
+        topics_path = tmp_path / "evening-culture-topics.md"
+        current_path = tmp_path / "evening-culture-current.json"
+        topics_path.write_text(
+            "# Evening culture topics\n\n"
+            "## Уже были\n\n"
+            "- Антигона — обсуждали 2026-06-07\n\n"
+            "## Кандидаты\n\n"
+            "- Антигона: долг\n",
+            encoding="utf-8",
+        )
+        current_path.write_text(
+            '{"id":"antigona","title":"Антигона","status":"closed",'
+            '"closed_at":"2026-05-26T17:30:00"}',
+            encoding="utf-8",
+        )
+        engine.EVENING_CULTURE_TOPICS_PATH = topics_path
+        engine.EVENING_CULTURE_CURRENT_PATH = current_path
+
+        engine._refresh_evening_culture_drive(
+            dt=60.0,
+            now_dt=datetime(2026, 5, 27, 16, 30),
+        )
+
+        source = engine.drives[DriveEngine.EVENING_CULTURE_DRIVE].source_data["evening_culture"]
+        assert source["status"] == "no_fresh_candidates"
+        assert source["action"] == (
+            "add fresh topics to evening-culture-topics.md or invite a "
+            "micro-culture thread from the current day"
+        )
 
     def test_evening_culture_skips_seen_candidates(self, tmp_path):
         engine = self._make_engine()
