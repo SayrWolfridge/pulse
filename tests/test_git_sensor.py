@@ -247,7 +247,7 @@ class TestReadDirty:
         sensor._repo_meta[repo_path] = config.sensors.git.repos[0]
 
         mock_fn = make_run_git_mock({
-            "status": "?? memory/sayr-thoughts/quiet.md\n",
+            "status": "?? semantic-garden/sayr-thoughts/quiet.md\n",
             "rev-list": "0\t0",
             "log": str(int(time.time())),
         })

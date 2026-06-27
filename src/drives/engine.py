@@ -90,7 +90,7 @@ class DriveEngine:
     EVENING_CULTURE_TOPICS_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/evening-culture-topics.md")
     EVENING_CULTURE_REMINDER_INTERVAL_SECONDS = 90 * 60
     EVENING_CULTURE_STALE_DISCUSSING_SECONDS = 24 * 60 * 60
-    EVENING_CULTURE_TERMINAL_STATUSES = {"completed", "discussed", "done"}
+    EVENING_CULTURE_TERMINAL_STATUSES = {"completed", "discussed", "done", "closed"}
     GROWTH_MATERIAL_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/growth-material.json")
     GROWTH_MATERIAL_PROMPT_PRESSURE = 0.8
 

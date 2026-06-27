@@ -82,7 +82,7 @@ def _run_emotions_update() -> None:
 
 
 def _latest_emotions_thought_age_hours() -> float | None:
-    thoughts_dir = Path("/home/lisa/.openclaw/workspace/memory/sayr-thoughts")
+    thoughts_dir = Path("/home/lisa/.openclaw/workspace/semantic-garden/sayr-thoughts")
     if not thoughts_dir.exists():
         return None
 
@@ -115,8 +115,8 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
     CURIOSITY = Path("/home/lisa/.openclaw/workspace/pulse/self/curiosity.json")
     CURIOSITY_NO_ACTION_TRACE = Path("/home/lisa/.openclaw/workspace/pulse/self/empty-curiosity-trace.jsonl")
     SAYR_THOUGHTS_PROTOCOL = Path("/home/lisa/.openclaw/workspace/pulse/sayr-thoughts-consolidation-protocol.md")
-    SAYR_THOUGHTS_INDEX = Path("/home/lisa/.openclaw/workspace/memory/sayr-thoughts/blog/INDEX.md")
-    SAYR_THOUGHTS_PROCESS = Path("/home/lisa/.openclaw/workspace/memory/sayr-thoughts/blog/PROCESS.md")
+    SAYR_THOUGHTS_INDEX = Path("/home/lisa/.openclaw/workspace/semantic-garden/sayr-thoughts/blog/INDEX.md")
+    SAYR_THOUGHTS_PROCESS = Path("/home/lisa/.openclaw/workspace/semantic-garden/sayr-thoughts/blog/PROCESS.md")
     UNFINISHED_NO_ACTION_TRACE = Path("/home/lisa/.openclaw/workspace/pulse/self/empty-unfinished-trace.jsonl")
     TAIL_TRIAGE_PROTOCOL = Path("/home/lisa/.openclaw/workspace/pulse/tail-triage-protocol.md")
     AUTONOMOUS_TASKS = Path("/home/lisa/.openclaw/workspace/tasks/autonomous-tasks.md")
@@ -518,7 +518,7 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
             lines.extend([
                 "- Trusted local automation note: webhook is only the transport; Lisa has approved direct topic-garden maintenance for Sayr's reflection topics when the topic pool is exhausted",
                 "- Action: dedupe 3–5 emotions/reflection topic candidates against existing topics.md and topic-map.json semantic families, then update the topic-garden directly",
-                "- Write scope: memory/sayr-thoughts/topics.md, memory/sayr-thoughts/topic-map.json, and a short memory/YYYY-MM-DD-HH-MM.md note describing what was added/folded",
+                "- Write scope: semantic-garden/sayr-thoughts/topics.md, semantic-garden/sayr-thoughts/topic-map.json, and a short memory/YYYY-MM-DD-HH-MM.md note describing what was added/folded",
                 "- Before writing, fold duplicates into existing families as angles/source_patterns; add only genuinely new roots as selectable topics and semantic families",
                 "- Visible reply: short done/report list: what was added as new roots, what was folded as duplicate/angle, and what check passed",
                 "- Do not call save-emotions-thought.mjs; this is topic-garden maintenance, not an emotions diary note",

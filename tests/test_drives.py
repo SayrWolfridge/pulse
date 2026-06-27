@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import pytest
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -205,7 +206,8 @@ class TestEveningCultureDrive:
         assert source["stale_discussing"] is True
         assert source["current_topic"] == "Прометей"
 
-    def test_completed_topic_clears_pressure_without_rotating(self, tmp_path):
+    @pytest.mark.parametrize("terminal_status", ["completed", "discussed", "done", "closed"])
+    def test_terminal_topic_clears_pressure_without_rotating(self, tmp_path, terminal_status):
         engine = self._make_engine()
         drive_name = DriveEngine.EVENING_CULTURE_DRIVE
         topics_path = tmp_path / "evening-culture-topics.md"
@@ -219,7 +221,7 @@ class TestEveningCultureDrive:
             encoding="utf-8",
         )
         current_path.write_text(
-            '{"id":"antigona","title":"Антигона","status":"completed",'
+            f'{{"id":"antigona","title":"Антигона","status":"{terminal_status}",'
             '"offered_at":"2026-05-26T17:30:00"}',
             encoding="utf-8",
         )
@@ -239,7 +241,7 @@ class TestEveningCultureDrive:
         assert engine.drives[drive_name].pressure == 0.0
         data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
         assert data["title"] == "Антигона"
-        assert data["status"] == "completed"
+        assert data["status"] == terminal_status
         assert "evening_culture" not in engine.drives[drive_name].source_data
 
     def test_evening_culture_skips_seen_candidates(self, tmp_path):

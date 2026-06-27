@@ -328,7 +328,7 @@ class GitSensor(BaseSensor):
         # Sayr thoughts are generated often and are handled by slower memory hygiene;
         # by themselves they should not wake workspace_git every Pulse tick.
         if repo_meta.get("name") == "workspace":
-            patterns.append("memory/sayr-thoughts/**")
+            patterns.append("semantic-garden/sayr-thoughts/**")
         return patterns
 
     @classmethod
