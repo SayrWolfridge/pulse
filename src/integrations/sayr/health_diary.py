@@ -108,7 +108,8 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
 
     CHECK_SCRIPT = Path("/home/lisa/.openclaw/workspace/skills/health-diary/scripts/check-daily-note.sh")
     HEALTH_MESSAGE_STATE = Path("/home/lisa/.openclaw/workspace/pulse/self/health-message-state.json")
-    FOOD_REMINDER_COOLDOWN_SECONDS = 2 * 60 * 60
+    HEALTH_REMINDER_COOLDOWN_SECONDS = 2 * 60 * 60
+    FOOD_REMINDER_COOLDOWN_SECONDS = HEALTH_REMINDER_COOLDOWN_SECONDS
     EMOTIONAL_LANDSCAPE = Path("/home/lisa/.openclaw/workspace/pulse/self/emotional-landscape.json")
     GOALS_SNAPSHOT = Path("/home/lisa/.openclaw/workspace/pulse/self/goals-snapshot.json")
     HYPOTHESES = Path("/home/lisa/.openclaw/workspace/pulse/self/hypotheses.json")
@@ -286,33 +287,73 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
             # Reminder bookkeeping must never break the health prompt itself.
             return
 
+    def _health_reminder_key(self, kind: str, data: dict, extra: dict | None = None) -> dict:
+        key = {
+            "kind": kind,
+            "date": data.get("date"),
+        }
+        if extra:
+            key.update(extra)
+        return key
+
+    def _health_reminder_allowed(self, kind: str, key: dict, *, now_ts: float) -> bool:
+        state = self._load_health_message_state()
+        item = state.get(kind) if isinstance(state.get(kind), dict) else {}
+        last_ts = item.get("last_reminder_ts")
+        last_key = item.get("last_key")
+
+        if last_key != key:
+            return True
+        if not isinstance(last_ts, (int, float)):
+            return True
+        return now_ts - float(last_ts) >= self.HEALTH_REMINDER_COOLDOWN_SECONDS
+
+    def _record_health_reminder(self, kind: str, key: dict, *, now_ts: float) -> None:
+        state = self._load_health_message_state()
+        state[kind] = {
+            "last_reminder_ts": now_ts,
+            "last_key": key,
+        }
+        self._save_health_message_state(state)
+
     def _food_reminder_key(self, data: dict) -> dict:
         return {
+            "kind": "food",
+            "date": data.get("date"),
             "has_real_food_today": data.get("has_real_food_today"),
             "meals_substantial": data.get("meals_substantial"),
             "last_meal_at": data.get("last_meal_at"),
         }
 
     def _food_reminder_allowed(self, data: dict, *, now_ts: float) -> bool:
-        state = self._load_health_message_state()
-        food = state.get("food") if isinstance(state.get("food"), dict) else {}
-        last_ts = food.get("last_reminder_ts")
-        last_key = food.get("last_key")
-        current_key = self._food_reminder_key(data)
-
-        if last_key != current_key:
-            return True
-        if not isinstance(last_ts, (int, float)):
-            return True
-        return now_ts - float(last_ts) >= self.FOOD_REMINDER_COOLDOWN_SECONDS
+        return self._health_reminder_allowed(
+            "food",
+            self._food_reminder_key(data),
+            now_ts=now_ts,
+        )
 
     def _record_food_reminder(self, data: dict, *, now_ts: float) -> None:
-        state = self._load_health_message_state()
-        state["food"] = {
-            "last_reminder_ts": now_ts,
-            "last_key": self._food_reminder_key(data),
-        }
-        self._save_health_message_state(state)
+        self._record_health_reminder(
+            "food",
+            self._food_reminder_key(data),
+            now_ts=now_ts,
+        )
+
+    def _maybe_add_health_line(
+        self,
+        lines: list[str],
+        *,
+        kind: str,
+        key: dict,
+        line: str,
+        now_ts: float,
+        record: bool,
+    ) -> None:
+        if not self._health_reminder_allowed(kind, key, now_ts=now_ts):
+            return
+        lines.append(line)
+        if record:
+            self._record_health_reminder(kind, key, now_ts=now_ts)
 
     def _build_health_block(self, *, record_food_reminder: bool = False) -> str:
         if not self.CHECK_SCRIPT.exists():
@@ -330,6 +371,7 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
             return ""
 
         now = datetime.now()
+        now_ts = time.time()
         current_hhmm = now.hour * 100 + now.minute
 
         def after(hh: int, mm: int = 0) -> bool:
@@ -388,18 +430,52 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
             food_lines.append(f"- Нормальных приёмов пищи пока: {meals}")
 
         if food_lines:
-            # Food reminders are state facts, not nag cooldowns.
-            # If Lisa dismissed the previous turn, then either she ate and needs
-            # to log it, or she did not eat and needs the same care again.
-            lines.extend(food_lines)
+            food_key = self._food_reminder_key(data)
+            if self._health_reminder_allowed("food", food_key, now_ts=now_ts):
+                lines.extend(food_lines)
+                if record_food_reminder:
+                    self._record_health_reminder("food", food_key, now_ts=now_ts)
 
         if after(16) and data.get("sleep_logged") is False:
-            lines.append("- Запись про сон сегодня ещё не видна")
+            self._maybe_add_health_line(
+                lines,
+                kind="sleep",
+                key=self._health_reminder_key(
+                    "sleep",
+                    data,
+                    {"sleep_logged": data.get("sleep_logged")},
+                ),
+                line="- Запись про сон сегодня ещё не видна",
+                now_ts=now_ts,
+                record=record_food_reminder,
+            )
         missing_vitamins = data.get("night_vitamins_missing") or []
         if after(23) and missing_vitamins:
-            lines.append(f"- Ночной набор: не хватает {', '.join(missing_vitamins)}")
+            self._maybe_add_health_line(
+                lines,
+                kind="night_vitamins",
+                key=self._health_reminder_key(
+                    "night_vitamins",
+                    data,
+                    {"missing": missing_vitamins},
+                ),
+                line=f"- Ночной набор: не хватает {', '.join(missing_vitamins)}",
+                now_ts=now_ts,
+                record=record_food_reminder,
+            )
         if after(23, 30) and not data.get("evening_snapshot_complete", True):
-            lines.append("- Вечерний слепок дня ещё не закрыт")
+            self._maybe_add_health_line(
+                lines,
+                kind="evening_snapshot",
+                key=self._health_reminder_key(
+                    "evening_snapshot",
+                    data,
+                    {"evening_snapshot_complete": data.get("evening_snapshot_complete")},
+                ),
+                line="- Вечерний слепок дня ещё не закрыт",
+                now_ts=now_ts,
+                record=record_food_reminder,
+            )
 
         if not lines:
             # Early-morning empty daily files are normal for Lisa's rhythm.

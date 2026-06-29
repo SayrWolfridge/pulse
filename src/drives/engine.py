@@ -91,6 +91,9 @@ class DriveEngine:
     EVENING_CULTURE_REMINDER_INTERVAL_SECONDS = 90 * 60
     EVENING_CULTURE_STALE_DISCUSSING_SECONDS = 24 * 60 * 60
     EVENING_CULTURE_TERMINAL_STATUSES = {"completed", "discussed", "done", "closed"}
+    EVENING_CULTURE_REFILL_DRIVE = "evening_culture_refill"
+    EVENING_CULTURE_REFILL_THRESHOLD = 5
+    EVENING_CULTURE_REFILL_COOLDOWN_SECONDS = 18 * 60 * 60
     GROWTH_MATERIAL_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/growth-material.json")
     GROWTH_MATERIAL_PROMPT_PRESSURE = 0.8
 
@@ -143,7 +146,11 @@ class DriveEngine:
             # sensor snapshot in _apply_sensor_spikes().
             # Growth is also source-driven: it should not accumulate simply because
             # time passed; it needs concrete material.
-            if self._is_git_drive(drive.name) or drive.name == "growth":
+            if (
+                self._is_git_drive(drive.name)
+                or drive.name == "growth"
+                or drive.name == self.EVENING_CULTURE_REFILL_DRIVE
+            ):
                 continue
             drive.tick(
                 dt=dt,
@@ -158,6 +165,8 @@ class DriveEngine:
         # cron-like obligation: pressure grows only in the evening window and
         # dissolves after it, so missed evenings do not become night debt.
         self._refresh_evening_culture_drive(dt=dt)
+
+        self._refresh_evening_culture_refill_drive(dt=dt)
 
         self._apply_circadian_weight_modifiers()
 
@@ -830,6 +839,93 @@ class DriveEngine:
         except OSError:
             return None
 
+    def _count_fresh_evening_culture_candidates(self) -> int:
+        """Count curated evening-culture topics that have not been discussed."""
+        text = self._read_evening_culture_topics_text()
+        if text is None:
+            return 0
+        candidates = self._extract_evening_culture_candidates(text)
+        seen = self._extract_evening_culture_seen_titles(text)
+        return sum(1 for candidate in candidates if candidate.casefold() not in seen)
+
+    def _refresh_evening_culture_refill_drive(
+        self,
+        *,
+        dt: float,
+        now_dt: datetime | None = None,
+    ):
+        """Grow maintenance pressure when the evening-culture shelf is thin.
+
+        `evening_culture` invites Lisa into one warm conversation.
+        `evening_culture_refill` is different: it asks Sayr to add fresh
+        candidates to the shelf so the invitation drive has real material.
+        """
+        now_dt = now_dt or datetime.now()
+        now_ts = now_dt.timestamp()
+        drive_name = self.EVENING_CULTURE_REFILL_DRIVE
+
+        if drive_name not in self.drives:
+            self.drives[drive_name] = Drive(
+                name=drive_name,
+                category=drive_name,
+                weight=0.30,
+            )
+        drive = self.drives[drive_name]
+
+        fresh_count = self._count_fresh_evening_culture_candidates()
+        if fresh_count >= self.EVENING_CULTURE_REFILL_THRESHOLD:
+            drive.pressure = 0.0
+            drive.source_data.pop("message", None)
+            drive.source_data.pop("evening_culture_refill", None)
+            return
+
+        refill_state = drive.source_data.get("evening_culture_refill") or {}
+        last_refill_ts = refill_state.get("last_refill_ts")
+        if isinstance(last_refill_ts, (int, float)):
+            if now_ts - float(last_refill_ts) < self.EVENING_CULTURE_REFILL_COOLDOWN_SECONDS:
+                drive.pressure = 0.0
+                drive.source_data.pop("message", None)
+                drive.source_data.pop("evening_culture_refill", None)
+                return
+
+        emptiness = 1.0 - (fresh_count / self.EVENING_CULTURE_REFILL_THRESHOLD)
+        rate_per_minute = 0.02 + 0.02 * emptiness
+        drive.spike(
+            rate_per_minute * (dt / 60.0),
+            min(0.85, self.config.drives.max_pressure),
+        )
+
+        drive.source_data["message"] = (
+            "EVENING CULTURE REFILL: fresh candidates on the evening-culture "
+            f"shelf are low ({fresh_count} fresh, threshold "
+            f"{self.EVENING_CULTURE_REFILL_THRESHOLD}). This is a maintenance "
+            "task for Sayr, not an invitation to Lisa. Add 3-7 new topic "
+            "candidates to pulse/self/evening-culture-topics.md under "
+            "'## Кандидаты'. Use myths, literature, films, music, art, "
+            "cultural history, or threads from current day conversations. "
+            "Do not propose a culture conversation to Lisa right now; refill "
+            "the shelf and report briefly."
+        )
+        drive.source_data["evening_culture_refill"] = {
+            "fresh_count": fresh_count,
+            "threshold": self.EVENING_CULTURE_REFILL_THRESHOLD,
+            "last_refill_ts": last_refill_ts,
+            "action": "add 3-7 candidates to evening-culture-topics.md",
+        }
+
+    def _mark_evening_culture_refill_addressed(self, *, now: float | None = None):
+        """Record a handled refill turn to avoid hammering the same request."""
+        now = now or time.time()
+        drive = self.drives.get(self.EVENING_CULTURE_REFILL_DRIVE)
+        if not drive:
+            return
+        refill_state = drive.source_data.get("evening_culture_refill")
+        if not isinstance(refill_state, dict):
+            refill_state = {}
+        refill_state["last_refill_ts"] = now
+        drive.source_data["evening_culture_refill"] = refill_state
+        drive.pressure = 0.0
+
     def _select_evening_culture_candidate(self) -> Optional[str]:
         """Pick the first fresh evening-culture topic from the curated shelf."""
         text = self._read_evening_culture_topics_text()
@@ -1262,6 +1358,8 @@ class DriveEngine:
             if top_drive.name == self.EVENING_CULTURE_DRIVE:
                 self._mark_evening_culture_prompted(now_dt=datetime.fromtimestamp(now))
                 top_drive.pressure = 0.0
+            if top_drive.name == self.EVENING_CULTURE_REFILL_DRIVE:
+                self._mark_evening_culture_refill_addressed(now=now)
             top_drive.last_addressed = now
             logger.info(
                 f"Drives decayed after successful turn. "
