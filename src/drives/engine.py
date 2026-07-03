@@ -743,14 +743,14 @@ class DriveEngine:
                 drive.pressure = max(drive.pressure, reminder_pressure)
         message = (
             "EVENING CULTURE TALK: from 16:30 to 21:00 Europe/Moscow, "
-            "Sayr's soft desire to invite Lisa into a warm non-work cultural "
-            "conversation grows, with a first gentle chance around 17:30-18:30. "
-            "From 21:00 to 00:00 it remains a gentle invitation without growing "
-            "further. If no conversation happens "
-            "before midnight, carry the topic to tomorrow without guilt or "
-            "night debt. If Lisa is busy or an active work conversation is "
-            "happening, keep it very short or let it pass. Offer one fresh "
-            "topic only; avoid recent repeats, especially Job/Иов."
+            "Sayr may offer Lisa one warm non-work cultural conversation if "
+            "the evening has room for it. The invitation should feel like "
+            "Sayr bringing a living topic to the fire, not like a scheduled "
+            "widget or pressure meter. If Lisa is busy, eating, playing, "
+            "resting, or already in another live conversation, keep it very "
+            "short or let it pass without debt. Offer one fresh topic only. "
+            "If Lisa says a topic is closed, close it and do not bring it "
+            "back without her explicit wish."
         )
         drive.source_data["message"] = message
         drive.source_data["evening_culture"] = {
