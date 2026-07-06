@@ -47,6 +47,29 @@ _IGNORED_DIRS = {
     "research",
 }
 
+# Logs with a calendar date in the filename are usually one-shot operational
+# artifacts (for example automation/ops/logs/foo-2026-05-25.log), not live
+# heartbeat logs. Treating them as age-based health signals creates permanent
+# stale alerts after the task is complete.
+_DATED_LOG_RE = re.compile(
+    r"(?:^|[-_])(20\d{2})[-_]?(0\d|1[0-2])[-_]?(0\d|[12]\d|3[01])(?:$|[-_])"
+)
+
+# Auto log-age sensors are intentionally conservative: only names that look
+# like durable/live process logs are watched. Everything else can still become a
+# health signal through explicit configuration or future opt-in metadata.
+_LIVE_LOG_HINTS = {
+    "current",
+    "daemon",
+    "heartbeat",
+    "latest",
+    "live",
+    "monitor",
+    "queue",
+    "service",
+    "worker",
+}
+
 
 @dataclass
 class HealthSignal:
@@ -468,7 +491,7 @@ class Parietal:
                 log_files = [
                     f
                     for f in logs_dir.iterdir()
-                    if f.suffix in (".log", ".jsonl") and f.is_file()
+                    if self._is_live_log_health_candidate(f)
                 ]
                 for lf in log_files[:3]:
                     signals.append(
@@ -571,6 +594,18 @@ class Parietal:
             )
 
         return signals
+
+    def _is_live_log_health_candidate(self, log_path: Path) -> bool:
+        """Return True when a log file is safe to treat as a liveness signal."""
+
+        if log_path.suffix not in (".log", ".jsonl") or not log_path.is_file():
+            return False
+
+        stem = log_path.stem.lower()
+        if _DATED_LOG_RE.search(stem):
+            return False
+
+        return any(hint in stem for hint in _LIVE_LOG_HINTS)
 
     def _extract_cf_health_url(self, wrangler_path: Path) -> Optional[str]:
         """Extract health URL from wrangler.toml."""
