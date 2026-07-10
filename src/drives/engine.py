@@ -94,6 +94,8 @@ class DriveEngine:
     EVENING_CULTURE_REFILL_DRIVE = "evening_culture_refill"
     EVENING_CULTURE_REFILL_THRESHOLD = 5
     EVENING_CULTURE_REFILL_COOLDOWN_SECONDS = 18 * 60 * 60
+    HEALTH_TRIGGER_SUCCESS_DECAY_FRACTION = 0.4
+    EVENING_CULTURE_TRIGGER_SUCCESS_DECAY_FRACTION = 0.35
     GROWTH_MATERIAL_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/growth-material.json")
     GROWTH_MATERIAL_PROMPT_PRESSURE = 0.8
 
@@ -1333,8 +1335,12 @@ class DriveEngine:
             pressure_multiplier = min(3.0, decision.total_pressure / 5.0)
             decay_total = decay_total * pressure_multiplier
 
+        top_drive_name = decision.top_drive.name if decision.top_drive else None
+
         if decision.total_pressure > 0:
             for drive in self.drives.values():
+                if drive.name == self.EVENING_CULTURE_DRIVE and top_drive_name == self.EVENING_CULTURE_DRIVE:
+                    continue
                 if drive.pressure > 0:
                     # Proportional decay — higher pressure drives lose more
                     proportion = drive.weighted_pressure / decision.total_pressure
@@ -1356,10 +1362,17 @@ class DriveEngine:
                     self._suppress_prompted_growth_material(candidate_id)
                     top_drive.pressure = 0.0
             if top_drive.name == self.EVENING_CULTURE_DRIVE:
-                self._mark_evening_culture_prompted(now_dt=datetime.fromtimestamp(now))
-                top_drive.pressure = 0.0
+                prompted = self._mark_evening_culture_prompted(now_dt=datetime.fromtimestamp(now))
+                if prompted:
+                    top_drive.decay(
+                        top_drive.pressure * self.EVENING_CULTURE_TRIGGER_SUCCESS_DECAY_FRACTION
+                    )
+                else:
+                    top_drive.pressure = 0.0
             if top_drive.name == self.EVENING_CULTURE_REFILL_DRIVE:
                 self._mark_evening_culture_refill_addressed(now=now)
+            if top_drive.name == "health":
+                top_drive.decay(top_drive.pressure * self.HEALTH_TRIGGER_SUCCESS_DECAY_FRACTION)
             top_drive.last_addressed = now
             logger.info(
                 f"Drives decayed after successful turn. "

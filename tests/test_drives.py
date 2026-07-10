@@ -531,7 +531,34 @@ class TestEveningCultureDrive:
         data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
         assert data["status"] == "offered"
         assert "last_reminded_at" in data
-        assert engine.drives[DriveEngine.EVENING_CULTURE_DRIVE].pressure == 0.0
+        assert engine.drives[DriveEngine.EVENING_CULTURE_DRIVE].pressure > 0.0
+        assert engine.drives[DriveEngine.EVENING_CULTURE_DRIVE].pressure < 0.9
+
+    def test_evening_culture_success_partially_discharges_after_prompt(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        engine = self._make_engine()
+        current_path = tmp_path / "evening-culture-current.json"
+        current_path.write_text(
+            '{"id":"antigona","title":"Антигона","status":"offered",'
+            '"offered_at":"2026-06-06T17:30:00"}',
+            encoding="utf-8",
+        )
+        engine.EVENING_CULTURE_CURRENT_PATH = current_path
+        drive = engine.drives[DriveEngine.EVENING_CULTURE_DRIVE] = Drive(
+            name=DriveEngine.EVENING_CULTURE_DRIVE,
+            category=DriveEngine.EVENING_CULTURE_DRIVE,
+            pressure=0.9,
+        )
+        decision = MagicMock()
+        decision.total_pressure = 5.0
+        decision.top_drive = drive
+
+        engine.on_trigger_success(decision)
+
+        # Delivered/promoted culture should stop nagging, but not be zeroed out
+        # unless the topic was actually closed/discussed.
+        assert engine.drives[DriveEngine.EVENING_CULTURE_DRIVE].pressure == pytest.approx(0.585)
 
     def test_evening_culture_success_does_not_reopen_completed_topic(self, tmp_path):
         from unittest.mock import MagicMock
@@ -722,6 +749,25 @@ class TestGrowthDrive:
         item = data["items"][0]
         assert item["suppress_until"].endswith("T14:00:00")
         assert engine.drives["growth"].pressure == 0.0
+
+    def test_health_trigger_success_discharges_extra_pressure_before_user_reply(self):
+        from unittest.mock import MagicMock
+
+        engine = self._make_engine()
+        health = engine.drives["health"] = Drive(name="health", category="health", pressure=1.0, weight=1.0)
+        engine.drives["curiosity"] = Drive(name="curiosity", category="curiosity", pressure=1.0, weight=1.0)
+
+        decision = MagicMock()
+        decision.total_pressure = 2.0
+        decision.top_drive = health
+
+        engine.on_trigger_success(decision)
+
+        # Base success decay would leave health at 0.5; health reminders get an
+        # additional small immediate discharge after webhook delivery, before
+        # Lisa answers, so the same reminder pressure does not keep pressing.
+        assert engine.drives["health"].pressure == 0.3
+        assert engine.drives["health"].last_addressed > 0
 
 
 class TestHealthStateBridgeRefresh:
