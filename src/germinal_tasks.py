@@ -63,14 +63,6 @@ FALLBACK_TASKS_BY_DRIVE = {
         "effort": "low",
         "requires_external": False,
     },
-    "sayr_thoughts": {
-        "title": "Inspect Sayr thoughts queue",
-        "description": "Read the thoughts topics/state and identify whether a cooldown-safe diary note is actually due. If not due, no-op.",
-        "rationale": "Sayr-thoughts pressure is a queue/cooldown problem first, not an invitation to freewrite.",
-        "drive": "sayr_thoughts",
-        "effort": "low",
-        "requires_external": False,
-    },
 }
 
 DEFAULT_NOOP_TASK = {
