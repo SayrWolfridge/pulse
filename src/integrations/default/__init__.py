@@ -47,6 +47,27 @@ class DefaultIntegration(Integration):
 
     def build_trigger_message(self, decision, config) -> str:
         prefix = config.openclaw.message_prefix
+        drive_name = decision.top_drive.name if decision.top_drive else ""
+
+        if drive_name == "evening_culture":
+            culture = decision.top_drive.source_data.get("evening_culture") or {}
+            topic = culture.get("current_topic") or "не выбрана"
+            status = str(culture.get("current_status") or culture.get("status") or "selected")
+            turn_kind = "первое приглашение" if status == "selected" else "мягкое повторное приглашение"
+            return "\n".join([
+                f"{prefix} evening_culture",
+                f"Тема: {topic}",
+                f"Ход: {turn_kind}",
+                "",
+                "Приди к Лисе с этой темой сейчас.",
+                "Ответ обязательно должен быть видимым: никогда не отвечай NO_REPLY или HEARTBEAT_OK.",
+                "",
+                "Форма: 2–4 живых предложения и один необязательный вопрос.",
+                "Если уже идёт разговор, мягко вплети приглашение в него одним коротким абзацем; не подавляй Pulse-turn.",
+                "Если прийти действительно нельзя, видимо и коротко скажи, что переносишь тему.",
+                "Не называй Pulse, давление, расписание, статусы или технические правила.",
+            ])
+
         parts = [
             f"{prefix} Self-initiated turn.",
             f"Trigger reason: {decision.reason}",
@@ -79,7 +100,6 @@ class DefaultIntegration(Integration):
         elif decision.sensor_context:
             parts.append(f"Suggested focus: {decision.sensor_context}")
 
-        drive_name = decision.top_drive.name if decision.top_drive else ""
         drive_protocol = _load_drive_protocol(drive_name) if drive_name else None
         if drive_protocol:
             parts.extend([

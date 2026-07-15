@@ -1059,7 +1059,7 @@ class DriveEngine:
         current = self._read_evening_culture_current()
         if self._is_evening_culture_terminal(current):
             return None
-        if current and current.get("status") in {"offered", "carried", "discussing"} and current.get("title"):
+        if current and current.get("status") in {"selected", "offered", "carried", "discussing"} and current.get("title"):
             if not self._is_evening_culture_seen_title(current.get("title")):
                 return current
             current["status"] = "discussed"
@@ -1073,9 +1073,8 @@ class DriveEngine:
         current = {
             "id": self._topic_slug(title),
             "title": title,
-            "status": "offered",
-            "offered_at": now_dt.isoformat(timespec="seconds"),
-            "last_reminded_at": now_dt.isoformat(timespec="seconds"),
+            "status": "selected",
+            "selected_at": now_dt.isoformat(timespec="seconds"),
             "reminder_interval_minutes": int(self.EVENING_CULTURE_REMINDER_INTERVAL_SECONDS / 60),
             "source": str(self.EVENING_CULTURE_TOPICS_PATH),
         }
@@ -1087,6 +1086,8 @@ class DriveEngine:
         anchor = self._parse_iso_datetime(current.get("last_reminded_at"))
         if anchor is None:
             anchor = self._parse_iso_datetime(current.get("offered_at"))
+        if anchor is None:
+            anchor = self._parse_iso_datetime(current.get("selected_at"))
         if anchor is None:
             return 0.0
         elapsed = (now_dt - anchor).total_seconds()
@@ -1103,6 +1104,7 @@ class DriveEngine:
         if self._is_evening_culture_terminal(current):
             return False
         current["status"] = "offered"
+        current.setdefault("offered_at", now_dt.isoformat(timespec="seconds"))
         current["last_reminded_at"] = now_dt.isoformat(timespec="seconds")
         current["reminder_interval_minutes"] = int(self.EVENING_CULTURE_REMINDER_INTERVAL_SECONDS / 60)
         self._write_evening_culture_current(current)
@@ -1112,7 +1114,7 @@ class DriveEngine:
         """After midnight, keep an unresolved topic for tomorrow without pressure."""
         now_dt = now_dt or datetime.now()
         current = self._read_evening_culture_current()
-        if not current or current.get("status") not in {"offered", "carried"}:
+        if not current or current.get("status") not in {"selected", "offered", "carried"}:
             return False
         current["status"] = "carried"
         current["carried_after"] = now_dt.isoformat(timespec="seconds")

@@ -284,7 +284,7 @@ class TestEveningCultureDrive:
         drive = engine.drives[DriveEngine.EVENING_CULTURE_DRIVE]
         data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
         assert data["title"] == "Прометей"
-        assert data["status"] == "offered"
+        assert data["status"] == "selected"
         assert drive.pressure > 0.0
         assert drive.source_data["evening_culture"]["current_topic"] == "Прометей"
 
@@ -346,7 +346,7 @@ class TestEveningCultureDrive:
 
         data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
         assert data["title"] == "Экклезиаст"
-        assert data["status"] == "offered"
+        assert data["status"] == "selected"
 
     def test_evening_culture_persists_current_topic(self, tmp_path):
         engine = self._make_engine()
@@ -370,7 +370,7 @@ class TestEveningCultureDrive:
 
         data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
         assert data["title"] == "Антигона"
-        assert data["status"] == "offered"
+        assert data["status"] == "selected"
         source = engine.drives[DriveEngine.EVENING_CULTURE_DRIVE].source_data["evening_culture"]
         assert source["current_topic"] == "Антигона"
 
@@ -430,7 +430,7 @@ class TestEveningCultureDrive:
         assert source["current_topic"] == "Дон Кихот"
         data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
         assert data["title"] == "Дон Кихот"
-        assert data["status"] == "offered"
+        assert data["status"] == "selected"
 
     def test_evening_culture_fresh_discussing_status_suppresses_pressure(self, tmp_path):
         engine = self._make_engine()
@@ -533,6 +533,33 @@ class TestEveningCultureDrive:
         assert "last_reminded_at" in data
         assert engine.drives[DriveEngine.EVENING_CULTURE_DRIVE].pressure > 0.0
         assert engine.drives[DriveEngine.EVENING_CULTURE_DRIVE].pressure < 0.9
+
+    def test_evening_culture_success_promotes_selected_topic_to_offered(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        engine = self._make_engine()
+        current_path = tmp_path / "evening-culture-current.json"
+        current_path.write_text(
+            '{"id":"antigona","title":"Антигона","status":"selected",'
+            '"selected_at":"2026-06-06T16:30:00"}',
+            encoding="utf-8",
+        )
+        engine.EVENING_CULTURE_CURRENT_PATH = current_path
+        drive = engine.drives[DriveEngine.EVENING_CULTURE_DRIVE] = Drive(
+            name=DriveEngine.EVENING_CULTURE_DRIVE,
+            category=DriveEngine.EVENING_CULTURE_DRIVE,
+            pressure=0.9,
+        )
+        decision = MagicMock()
+        decision.total_pressure = 0.9
+        decision.top_drive = drive
+
+        engine.on_trigger_success(decision)
+
+        data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
+        assert data["status"] == "offered"
+        assert "offered_at" in data
+        assert "last_reminded_at" in data
 
     def test_evening_culture_success_partially_discharges_after_prompt(self, tmp_path):
         from unittest.mock import MagicMock
