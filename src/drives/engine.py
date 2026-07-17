@@ -766,6 +766,7 @@ class DriveEngine:
                 "current_topic_id": current.get("id"),
                 "current_topic": current.get("title"),
                 "offered_at": current.get("offered_at"),
+                "started_discussing_at": current.get("started_discussing_at"),
                 "last_reminded_at": current.get("last_reminded_at"),
                 "reminder_interval_minutes": int(self.EVENING_CULTURE_REMINDER_INTERVAL_SECONDS / 60),
                 "status": current.get("status"),
