@@ -73,6 +73,17 @@ class SensorManager:
                     "Git sensor enabled but no repos configured — "
                     "add sensors.git.repos in pulse.yaml"
                 )
+        # Passive local-only check for a stale verified OpenClaw private backup.
+        rb = getattr(config.sensors, "runtime_backup", None)
+        if rb and rb.enabled:
+            from pulse.src.sensors.runtime_backup_sensor import RuntimeBackupSensor
+            self.sensors.append(RuntimeBackupSensor(
+                config,
+                runtime=rb.runtime_path,
+                provenance=rb.provenance_path,
+                backup=rb.backup_path,
+                pressure_spike=rb.pressure_spike,
+            ))
         # Phase 3: Web sensor (RSS/Atom feed monitoring)
         if getattr(config.sensors, "web", None) and config.sensors.web.enabled:
             if config.sensors.web.feeds:

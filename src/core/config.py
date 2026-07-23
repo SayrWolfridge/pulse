@@ -128,6 +128,15 @@ class GitSensorConfig:
 
 
 @dataclass
+class RuntimeBackupSensorConfig:
+    enabled: bool = False
+    runtime_path: str = "/home/lisa/src/openclaw-current"
+    provenance_path: str = "/home/lisa/.openclaw/workspace/automation/ops/openclaw-runtime-provenance.json"
+    backup_path: str = "/home/lisa/.openclaw/workspace/state/repo-audit/runtime-private-backup-latest.json"
+    pressure_spike: float = 0.15
+
+
+@dataclass
 class WebSensorConfig:
     enabled: bool = False
     feeds: List[str] = field(default_factory=list)   # RSS/Atom feed URLs to monitor
@@ -166,6 +175,7 @@ class SensorsConfig:
     discord: DiscordSensorConfig = field(default_factory=DiscordSensorConfig)
     twitter: TwitterSensorConfig = field(default_factory=TwitterSensorConfig)
     git: GitSensorConfig = field(default_factory=GitSensorConfig)
+    runtime_backup: RuntimeBackupSensorConfig = field(default_factory=RuntimeBackupSensorConfig)
     web: WebSensorConfig = field(default_factory=WebSensorConfig)
     calendar: CalendarSensorConfig = field(default_factory=CalendarSensorConfig)
     system: SystemSensorConfig = field(default_factory=SystemSensorConfig)
@@ -436,6 +446,7 @@ class PulseConfig:
             dc = s.get("discord", {})
             tw = s.get("twitter", {})
             gt = s.get("git", {})
+            rb = s.get("runtime_backup", {})
             wb = s.get("web", {})
             cal = s.get("calendar", {})
             config.sensors = SensorsConfig(
@@ -536,6 +547,13 @@ class PulseConfig:
                         "waiting_user_pressure_cap",
                         config.sensors.git.waiting_user_pressure_cap,
                     ),
+                ),
+                runtime_backup=RuntimeBackupSensorConfig(
+                    enabled=rb.get("enabled", config.sensors.runtime_backup.enabled),
+                    runtime_path=rb.get("runtime_path", config.sensors.runtime_backup.runtime_path),
+                    provenance_path=rb.get("provenance_path", config.sensors.runtime_backup.provenance_path),
+                    backup_path=rb.get("backup_path", config.sensors.runtime_backup.backup_path),
+                    pressure_spike=rb.get("pressure_spike", config.sensors.runtime_backup.pressure_spike),
                 ),
                 web=WebSensorConfig(
                     enabled=wb.get("enabled", config.sensors.web.enabled),

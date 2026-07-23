@@ -331,6 +331,14 @@ class DriveEngine:
             if "social" in self.drives:
                 self.drives["social"].spike(0.1, self.config.drives.max_pressure)
 
+        # Runtime backup is a separate source from ordinary git dirtiness.
+        backup_data = sensor_data.get("runtime_backup", {})
+        if backup_data.get("signal") == "runtime_backup":
+            drive_name = backup_data.get("drive", "goals")
+            if drive_name in self.drives:
+                amount = float(backup_data.get("pressure", 0.15))
+                self.drives[drive_name].spike(amount, self.config.drives.max_pressure)
+
         # Git: route repo-local dirtiness to the drives declared for that repo
         # (e.g. workspace_git vs obsidian_git) instead of the old generic goals drive.
         git_data = sensor_data.get("git", {})
