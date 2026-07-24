@@ -150,7 +150,7 @@ class DriveEngine:
             # time passed; it needs concrete material.
             if (
                 self._is_git_drive(drive.name)
-                or drive.name == "growth"
+                or drive.name in {"growth", "runtime_backup"}
                 or drive.name == self.EVENING_CULTURE_REFILL_DRIVE
             ):
                 continue
@@ -332,12 +332,25 @@ class DriveEngine:
                 self.drives["social"].spike(0.1, self.config.drives.max_pressure)
 
         # Runtime backup is a separate source from ordinary git dirtiness.
-        backup_data = sensor_data.get("runtime_backup", {})
-        if backup_data.get("signal") == "runtime_backup":
-            drive_name = backup_data.get("drive", "goals")
+        # It is fully source-driven: stale evidence raises pressure, while a
+        # current/quiet reading clears any pressure left from an older mismatch.
+        if "runtime_backup" in sensor_data:
+            backup_data = sensor_data.get("runtime_backup") or {}
+            drive_name = backup_data.get("drive", "runtime_backup")
             if drive_name in self.drives:
-                amount = float(backup_data.get("pressure", 0.15))
-                self.drives[drive_name].spike(amount, self.config.drives.max_pressure)
+                drive = self.drives[drive_name]
+                if backup_data.get("signal") == "runtime_backup":
+                    amount = float(backup_data.get("pressure", 0.15))
+                    drive.spike(amount, self.config.drives.max_pressure)
+                    drive.source_data["runtime_backup"] = dict(backup_data)
+                    drive.source_data["message"] = (
+                        "Runtime backup is stale for the readiness-verified live runtime; "
+                        "ask Lisa before running the private GitHub backup push."
+                    )
+                else:
+                    drive.pressure = 0.0
+                    drive.source_data.pop("runtime_backup", None)
+                    drive.source_data.pop("message", None)
 
         # Git: route repo-local dirtiness to the drives declared for that repo
         # (e.g. workspace_git vs obsidian_git) instead of the old generic goals drive.

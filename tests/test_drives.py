@@ -635,6 +635,77 @@ class TestEveningCultureDrive:
         assert engine.drives[DriveEngine.EVENING_CULTURE_DRIVE].pressure == 0.0
 
 
+class TestRuntimeBackupDrive:
+    """Runtime backup pressure must follow sensor evidence only."""
+
+    def _make_engine(self):
+        from unittest.mock import MagicMock
+
+        cat_backup = MagicMock()
+        cat_backup.weight = 0.55
+        cat_goals = MagicMock()
+        cat_goals.weight = 1.0
+
+        config = MagicMock()
+        config.drives.categories = {
+            "runtime_backup": cat_backup,
+            "goals": cat_goals,
+        }
+        config.drives.pressure_rate = 0.1
+        config.drives.max_pressure = 5.0
+        config.drives.success_decay = 0.5
+        config.drives.adaptive_decay = False
+        state = MagicMock()
+        state.get.return_value = {}
+        return DriveEngine(config=config, state=state)
+
+    def test_runtime_backup_does_not_accumulate_from_time(self):
+        engine = self._make_engine()
+        engine.last_tick_time -= 60.0
+
+        engine.tick(sensor_data={})
+
+        assert engine.drives["runtime_backup"].pressure == 0.0
+        assert engine.drives["goals"].pressure > 0.0
+
+    def test_stale_runtime_backup_sets_pressure_and_context(self):
+        engine = self._make_engine()
+
+        engine.tick(sensor_data={
+            "runtime_backup": {
+                "signal": "runtime_backup",
+                "drive": "runtime_backup",
+                "pressure": 0.2,
+                "reason": "stale_backup",
+                "live_head": "live",
+                "backup_head": "old",
+            }
+        })
+
+        drive = engine.drives["runtime_backup"]
+        assert drive.pressure == pytest.approx(0.2)
+        assert drive.source_data["runtime_backup"]["reason"] == "stale_backup"
+        assert "ask Lisa" in drive.source_data["message"]
+
+    def test_current_runtime_backup_clears_old_pressure(self):
+        engine = self._make_engine()
+        drive = engine.drives["runtime_backup"]
+        drive.pressure = 0.8
+        drive.source_data["runtime_backup"] = {"reason": "stale_backup"}
+        drive.source_data["message"] = "old"
+
+        engine.tick(sensor_data={
+            "runtime_backup": {
+                "signal": None,
+                "reason": "backup_current",
+            }
+        })
+
+        assert drive.pressure == 0.0
+        assert "runtime_backup" not in drive.source_data
+        assert "message" not in drive.source_data
+
+
 class TestGrowthDrive:
     """Growth should be source-driven, not passive time pressure."""
 

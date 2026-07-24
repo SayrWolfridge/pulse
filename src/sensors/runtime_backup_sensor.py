@@ -140,6 +140,6 @@ class RuntimeBackupSensor(BaseSensor):
             "live_head": live_head,
             "live_tree": live_tree,
             "backup_head": backup_head,
-            "drive": "goals",
+            "drive": "runtime_backup",
             "pressure": self._pressure_spike,
         }
