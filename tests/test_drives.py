@@ -668,21 +668,24 @@ class TestRuntimeBackupDrive:
         assert engine.drives["runtime_backup"].pressure == 0.0
         assert engine.drives["goals"].pressure > 0.0
 
-    def test_stale_runtime_backup_sets_pressure_and_context(self):
+    def test_stale_runtime_backup_sets_pressure_once_and_context(self):
         engine = self._make_engine()
-
-        engine.tick(sensor_data={
-            "runtime_backup": {
-                "signal": "runtime_backup",
-                "drive": "runtime_backup",
-                "pressure": 0.2,
-                "reason": "stale_backup",
-                "live_head": "live",
-                "backup_head": "old",
-            }
-        })
-
         drive = engine.drives["runtime_backup"]
+        drive.pressure = 4.05  # migrate pressure inflated by the old repeated-spike logic
+
+        reading = {
+            "signal": "runtime_backup",
+            "drive": "runtime_backup",
+            "pressure": 0.2,
+            "reason": "stale_backup",
+            "live_head": "live",
+            "backup_head": "old",
+            "new_event": True,
+        }
+        engine.tick(sensor_data={"runtime_backup": reading})
+        reading["new_event"] = False
+        engine.tick(sensor_data={"runtime_backup": reading})
+
         assert drive.pressure == pytest.approx(0.2)
         assert drive.source_data["runtime_backup"]["reason"] == "stale_backup"
         assert "ask Lisa" in drive.source_data["message"]

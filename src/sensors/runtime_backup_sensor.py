@@ -37,12 +37,13 @@ class RuntimeBackupSensor(BaseSensor):
         runtime: str = "/home/lisa/src/openclaw-current",
         provenance: str = "/home/lisa/.openclaw/workspace/automation/ops/openclaw-runtime-provenance.json",
         backup: str = "/home/lisa/.openclaw/workspace/state/repo-audit/runtime-private-backup-latest.json",
-        pressure_spike: float = 0.15,
+        pressure_spike: float = 2.0,
     ) -> None:
         self._runtime_link = Path(runtime)
         self._provenance_path = Path(provenance)
         self._backup_path = Path(backup)
         self._pressure_spike = pressure_spike
+        self._last_signal_fingerprint: Optional[tuple[str, str, Optional[str], str]] = None
 
     async def initialize(self) -> None:
         pass
@@ -125,6 +126,7 @@ class RuntimeBackupSensor(BaseSensor):
         return entry
 
     def _quiet(self, reason: str) -> Dict[str, Any]:
+        self._last_signal_fingerprint = None
         return {"signal": None, "reason": reason}
 
     def _signal(
@@ -134,6 +136,9 @@ class RuntimeBackupSensor(BaseSensor):
         backup_head: Optional[str],
         reason: str,
     ) -> Dict[str, Any]:
+        fingerprint = (live_head, live_tree, backup_head, reason)
+        new_event = fingerprint != self._last_signal_fingerprint
+        self._last_signal_fingerprint = fingerprint
         return {
             "signal": "runtime_backup",
             "reason": reason,
@@ -142,4 +147,5 @@ class RuntimeBackupSensor(BaseSensor):
             "backup_head": backup_head,
             "drive": "runtime_backup",
             "pressure": self._pressure_spike,
+            "new_event": new_event,
         }

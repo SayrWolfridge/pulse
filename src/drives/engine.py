@@ -340,8 +340,12 @@ class DriveEngine:
             if drive_name in self.drives:
                 drive = self.drives[drive_name]
                 if backup_data.get("signal") == "runtime_backup":
-                    amount = float(backup_data.get("pressure", 0.15))
-                    drive.spike(amount, self.config.drives.max_pressure)
+                    amount = float(backup_data.get("pressure", 2.0))
+                    if backup_data.get("new_event", True):
+                        drive.pressure = min(
+                            max(0.0, amount),
+                            self.config.drives.max_pressure,
+                        )
                     drive.source_data["runtime_backup"] = dict(backup_data)
                     drive.source_data["message"] = (
                         "Runtime backup is stale for the readiness-verified live runtime; "

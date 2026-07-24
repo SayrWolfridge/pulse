@@ -99,6 +99,32 @@ async def test_stale_backup_signals(tmp_path):
     assert result["live_head"] == LIVE_HEAD
     assert result["backup_head"] == BACKUP_HEAD
     assert result["pressure"] == 0.2
+    assert result["new_event"] is True
+
+
+@pytest.mark.asyncio
+async def test_unchanged_stale_backup_emits_only_one_new_event(tmp_path):
+    """Persistent stale evidence stays visible without repeated pressure events."""
+    sensor = _make_sensor(
+        tmp_path,
+        _provenance(REPO_PATH, LIVE_HEAD, LIVE_TREE),
+        _backup_state(BACKUP_HEAD, BACKUP_TREE),
+    )
+    with patch.object(Path, "resolve", return_value=Path(REPO_PATH)), \
+         patch.object(Path, "exists", return_value=True):
+        first = await sensor.read()
+        repeated = await sensor.read()
+        _write_json(sensor._backup_path, _backup_state(LIVE_HEAD, LIVE_TREE))
+        current = await sensor.read()
+        _write_json(sensor._backup_path, _backup_state(BACKUP_HEAD, BACKUP_TREE))
+        stale_again = await sensor.read()
+
+    assert first["new_event"] is True
+    assert repeated["signal"] == "runtime_backup"
+    assert repeated["new_event"] is False
+    assert current["signal"] is None
+    assert current["reason"] == "backup_current"
+    assert stale_again["new_event"] is True
 
 
 @pytest.mark.asyncio

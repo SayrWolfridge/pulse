@@ -133,7 +133,7 @@ class RuntimeBackupSensorConfig:
     runtime_path: str = "/home/lisa/src/openclaw-current"
     provenance_path: str = "/home/lisa/.openclaw/workspace/automation/ops/openclaw-runtime-provenance.json"
     backup_path: str = "/home/lisa/.openclaw/workspace/state/repo-audit/runtime-private-backup-latest.json"
-    pressure_spike: float = 0.15
+    pressure_spike: float = 2.0
 
 
 @dataclass
