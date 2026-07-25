@@ -13,12 +13,21 @@ while the main session stays clean for human conversation.
 import json
 import logging
 from typing import Optional
+from urllib.parse import urlparse
 
 import aiohttp
 
 from pulse.src.core.config import PulseConfig
 
 logger = logging.getLogger("pulse.webhook")
+
+
+def _ssl_for_url(url: str):
+    """Accept the Gateway's self-signed TLS certificate on loopback only."""
+    parsed = urlparse(url)
+    if parsed.scheme == "https" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}:
+        return False
+    return None
 
 
 class OpenClawWebhook:
@@ -110,6 +119,7 @@ class OpenClawWebhook:
                 json=payload,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=10),
+                ssl=_ssl_for_url(self.url),
             ) as resp:
                 if resp.status in (200, 202):
                     run_id = None
@@ -148,8 +158,6 @@ class OpenClawWebhook:
         Send a wake event (lighter than full agent turn).
         Uses /hooks/wake instead of /hooks/agent.
         """
-        from urllib.parse import urlparse
-
         session = await self._get_session()
         parsed = urlparse(self.url)
         wake_url = f"{parsed.scheme}://{parsed.netloc}/hooks/wake"
@@ -166,6 +174,7 @@ class OpenClawWebhook:
                 json=payload,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=10),
+                ssl=_ssl_for_url(wake_url),
             ) as resp:
                 return resp.status == 200
         except Exception as e:
