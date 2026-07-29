@@ -845,7 +845,24 @@ class DriveEngine:
         return candidates
 
     @staticmethod
-    def _extract_evening_culture_seen_titles(text: str) -> set[str]:
+    def _normalize_evening_culture_title(title: str) -> str:
+        title = title.split("—", 1)[0].split(":", 1)[0].strip()
+        return " ".join(title.casefold().split())
+
+    @classmethod
+    def _is_evening_culture_seen_title(cls, candidate: str, seen: set[str]) -> bool:
+        normalized = cls._normalize_evening_culture_title(candidate)
+        if not normalized:
+            return False
+        return any(
+            normalized == seen_title
+            or normalized in seen_title
+            or seen_title in normalized
+            for seen_title in seen
+        )
+
+    @classmethod
+    def _extract_evening_culture_seen_titles(cls, text: str) -> set[str]:
         """Return topic titles already recorded in the 'Уже были' section."""
         in_seen = False
         seen: set[str] = set()
@@ -857,8 +874,9 @@ class DriveEngine:
             if not in_seen or not line.startswith("- "):
                 continue
             title = line[2:].split("—", 1)[0].split(":", 1)[0].strip()
-            if title:
-                seen.add(title.casefold())
+            normalized = cls._normalize_evening_culture_title(title)
+            if normalized:
+                seen.add(normalized)
         return seen
 
     def _read_evening_culture_topics_text(self) -> Optional[str]:
@@ -874,7 +892,11 @@ class DriveEngine:
             return 0
         candidates = self._extract_evening_culture_candidates(text)
         seen = self._extract_evening_culture_seen_titles(text)
-        return sum(1 for candidate in candidates if candidate.casefold() not in seen)
+        return sum(
+            1
+            for candidate in candidates
+            if not self._is_evening_culture_seen_title(candidate, seen)
+        )
 
     def _refresh_evening_culture_refill_drive(
         self,
@@ -962,15 +984,18 @@ class DriveEngine:
         candidates = self._extract_evening_culture_candidates(text)
         seen = self._extract_evening_culture_seen_titles(text)
         for candidate in candidates:
-            if candidate.casefold() not in seen:
+            if not self._is_evening_culture_seen_title(candidate, seen):
                 return candidate
         return None
 
-    def _is_evening_culture_seen_title(self, title: Any) -> bool:
+    def _is_evening_culture_seen_title_from_file(self, title: Any) -> bool:
         text = self._read_evening_culture_topics_text()
         if text is None:
             return False
-        return str(title).casefold() in self._extract_evening_culture_seen_titles(text)
+        return self._is_evening_culture_seen_title(
+            str(title),
+            self._extract_evening_culture_seen_titles(text),
+        )
 
     def _read_evening_culture_current(self) -> Optional[dict]:
         try:
@@ -1086,7 +1111,7 @@ class DriveEngine:
         if self._is_evening_culture_terminal(current):
             return None
         if current and current.get("status") in {"selected", "offered", "carried", "discussing"} and current.get("title"):
-            if not self._is_evening_culture_seen_title(current.get("title")):
+            if not self._is_evening_culture_seen_title_from_file(current.get("title")):
                 return current
             current["status"] = "discussed"
             current["closed_reason"] = "topic already present in evening-culture 'Уже были'"

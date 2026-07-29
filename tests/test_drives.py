@@ -348,6 +348,31 @@ class TestEveningCultureDrive:
         assert data["title"] == "Экклезиаст"
         assert data["status"] == "selected"
 
+    def test_evening_culture_skips_seen_candidate_when_seen_title_has_suffix(self, tmp_path):
+        engine = self._make_engine()
+        topics_path = tmp_path / "evening-culture-topics.md"
+        current_path = tmp_path / "evening-culture-current.json"
+        topics_path.write_text(
+            "# Evening culture topics\n\n"
+            "## Уже были\n\n"
+            "- Мамонтов и Абрамцево / Кремниевая долина как среда брожения — обсуждали 2026-07-28/29\n\n"
+            "## Кандидаты\n\n"
+            "- Мамонтов и Абрамцево\n"
+            "- Экклезиаст: усталость от смысла\n",
+            encoding="utf-8",
+        )
+        engine.EVENING_CULTURE_TOPICS_PATH = topics_path
+        engine.EVENING_CULTURE_CURRENT_PATH = current_path
+
+        engine._refresh_evening_culture_drive(
+            dt=60.0,
+            now_dt=datetime(2026, 7, 29, 19, 9),
+        )
+
+        data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
+        assert data["title"] == "Экклезиаст"
+        assert data["status"] == "selected"
+
     def test_evening_culture_persists_current_topic(self, tmp_path):
         engine = self._make_engine()
         topics_path = tmp_path / "evening-culture-topics.md"
