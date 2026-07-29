@@ -341,7 +341,7 @@ class TestEveningCultureDrive:
 
         engine._refresh_evening_culture_drive(
             dt=60.0,
-            now_dt=datetime(2026, 6, 13, 20, 0),
+            now_dt=datetime(2026, 6, 14, 20, 0),
         )
 
         data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
@@ -366,12 +366,43 @@ class TestEveningCultureDrive:
 
         engine._refresh_evening_culture_drive(
             dt=60.0,
-            now_dt=datetime(2026, 7, 29, 19, 9),
+            now_dt=datetime(2026, 7, 30, 19, 9),
         )
 
         data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
         assert data["title"] == "Экклезиаст"
         assert data["status"] == "selected"
+
+    def test_evening_culture_discussion_today_suppresses_another_invitation(self, tmp_path):
+        engine = self._make_engine()
+        drive_name = DriveEngine.EVENING_CULTURE_DRIVE
+        topics_path = tmp_path / "evening-culture-topics.md"
+        current_path = tmp_path / "evening-culture-current.json"
+        topics_path.write_text(
+            "# Evening culture topics\n\n"
+            "## Уже были\n\n"
+            "- Мамонтов и Абрамцево — обсуждали 2026-07-28/29\n\n"
+            "## Кандидаты\n\n"
+            "- Экклезиаст: усталость от смысла\n",
+            encoding="utf-8",
+        )
+        engine.EVENING_CULTURE_TOPICS_PATH = topics_path
+        engine.EVENING_CULTURE_CURRENT_PATH = current_path
+        engine.drives[drive_name] = Drive(
+            name=drive_name,
+            category=drive_name,
+            pressure=0.5,
+        )
+
+        engine._refresh_evening_culture_drive(
+            dt=60.0,
+            now_dt=datetime(2026, 7, 29, 19, 9),
+        )
+
+        drive = engine.drives[drive_name]
+        assert drive.pressure == 0.0
+        assert "evening_culture" not in drive.source_data
+        assert not current_path.exists()
 
     def test_evening_culture_persists_current_topic(self, tmp_path):
         engine = self._make_engine()

@@ -729,6 +729,19 @@ class DriveEngine:
             drive.source_data.pop("evening_culture", None)
             return
 
+        topics_text = self._read_evening_culture_topics_text()
+        if (
+            topics_text is not None
+            and self._was_evening_culture_discussed_on_date(
+                topics_text,
+                date=now_dt.date(),
+            )
+        ):
+            drive.pressure = 0.0
+            drive.source_data.pop("message", None)
+            drive.source_data.pop("evening_culture", None)
+            return
+
         existing_current = self._read_evening_culture_current()
         if self._is_evening_culture_terminal(existing_current):
             if self._archive_stale_evening_culture_terminal_current(
@@ -878,6 +891,25 @@ class DriveEngine:
             if normalized:
                 seen.add(normalized)
         return seen
+
+    @staticmethod
+    def _was_evening_culture_discussed_on_date(text: str, *, date) -> bool:
+        """Return whether the history records a culture discussion on ``date``."""
+        in_seen = False
+        full_date = date.isoformat()
+        compact_date = re.compile(
+            rf"\b{date:%Y-%m-}\d{{2}}/{date.day:02d}\b"
+        )
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if line.startswith("## "):
+                in_seen = line == "## Уже были"
+                continue
+            if in_seen and line.startswith("- ") and (
+                full_date in line or compact_date.search(line)
+            ):
+                return True
+        return False
 
     def _read_evening_culture_topics_text(self) -> Optional[str]:
         try:
