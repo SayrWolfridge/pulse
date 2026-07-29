@@ -669,6 +669,44 @@ class TestEveningCultureDrive:
         assert data["status"] == "completed"
         assert engine.drives[DriveEngine.EVENING_CULTURE_DRIVE].pressure == 0.0
 
+    def test_evening_culture_terminal_topic_today_suppresses_new_invitation(self, tmp_path):
+        engine = self._make_engine()
+        topics_path = tmp_path / "evening-culture-topics.md"
+        current_path = tmp_path / "evening-culture-current.json"
+        topics_path.write_text(
+            "# Evening culture topics\n\n"
+            "## Уже были\n\n"
+            "- Антигона — обсуждали 2026-06-06\n\n"
+            "## Кандидаты\n\n"
+            "- Тарковский и пространство\n",
+            encoding="utf-8",
+        )
+        current_path.write_text(
+            '{"id":"mammoth-abramtsevo",'
+            '"title":"Мамонтов и Абрамцево / Кремниевая долина как среда брожения",'
+            '"status":"closed",'
+            '"closed_reason":"discussed_today",'
+            '"closed_at":"2026-06-07T19:30:00"}',
+            encoding="utf-8",
+        )
+        engine.EVENING_CULTURE_TOPICS_PATH = topics_path
+        engine.EVENING_CULTURE_CURRENT_PATH = current_path
+        drive = engine.drives[DriveEngine.EVENING_CULTURE_DRIVE] = Drive(
+            name=DriveEngine.EVENING_CULTURE_DRIVE,
+            category=DriveEngine.EVENING_CULTURE_DRIVE,
+            pressure=0.8,
+        )
+
+        engine._refresh_evening_culture_drive(dt=60.0, now_dt=datetime(2026, 6, 7, 22, 9))
+
+        data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
+        assert data["status"] == "closed"
+        assert data["title"] == "Мамонтов и Абрамцево / Кремниевая долина как среда брожения"
+        assert "Тарковский" not in data["title"]
+        assert drive.pressure == 0.0
+        assert "message" not in drive.source_data
+        assert "evening_culture" not in drive.source_data
+
     def test_evening_culture_carries_after_midnight(self, tmp_path):
         engine = self._make_engine()
         current_path = tmp_path / "evening-culture-current.json"
