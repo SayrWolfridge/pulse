@@ -28,6 +28,7 @@ class TestLastTriggerTimeInit:
 
         # Simpler: inspect the source default directly
         import inspect
+
         source = inspect.getsource(PulseDaemon.__init__)
         # Must NOT contain bare 0.0 assignment for last_trigger_time
         assert "self.last_trigger_time = 0.0" not in source, (
@@ -64,9 +65,9 @@ class TestLastTriggerTimeInit:
             f"last_trigger_time ({daemon.last_trigger_time}) is before construction time ({before}). "
             "Should be initialized to time.time()."
         )
-        assert daemon.last_trigger_time <= after + 0.1, (
-            f"last_trigger_time ({daemon.last_trigger_time}) is suspiciously in the future."
-        )
+        assert (
+            daemon.last_trigger_time <= after + 0.1
+        ), f"last_trigger_time ({daemon.last_trigger_time}) is suspiciously in the future."
 
     def test_idle_string_not_astronomical(self):
         """The idle value in trigger reason must be <3600s on a fresh daemon.
@@ -99,6 +100,99 @@ class TestLastTriggerTimeInit:
             f"Fresh daemon reports idle={idle:.0f}s — "
             "this suggests last_trigger_time was initialized to epoch (0.0) instead of time.time(). "
             "A 56-year idle is a misleading artifact, not a real measurement."
+        )
+
+
+class TestCooldownContinuity:
+    def test_restore_uses_last_real_trigger(self):
+        from pulse.src.core.daemon import PulseDaemon
+
+        daemon = PulseDaemon.__new__(PulseDaemon)
+        daemon.state = MagicMock()
+        daemon.state.get.return_value = {"timestamp": 4_500.0}
+        daemon.config = MagicMock()
+        daemon.config.openclaw.min_trigger_interval = 1_200
+        daemon._turn_timestamps = []
+
+        with patch("pulse.src.core.daemon.time.time", return_value=5_000.0):
+            daemon._restore_last_trigger_time()
+
+        assert daemon.last_trigger_time == 4_500.0
+        assert daemon._turn_timestamps == [4_500.0]
+
+    def test_missing_trigger_does_not_add_restart_cooldown(self):
+        from pulse.src.core.daemon import PulseDaemon
+
+        daemon = PulseDaemon.__new__(PulseDaemon)
+        daemon.state = MagicMock()
+        daemon.state.get.return_value = None
+        daemon.config = MagicMock()
+        daemon.config.openclaw.min_trigger_interval = 1_200
+        daemon._turn_timestamps = []
+
+        with patch("pulse.src.core.daemon.time.time", return_value=5_000.0):
+            daemon._restore_last_trigger_time()
+
+        assert daemon.last_trigger_time == 3_800.0
+        assert daemon._turn_timestamps == []
+
+    def test_unrelated_mutation_does_not_snapshot_cooldown(self):
+        from pulse.src.core.daemon import PulseDaemon
+
+        daemon = PulseDaemon.__new__(PulseDaemon)
+        daemon.state = MagicMock()
+        daemon.state.get.return_value = {"trigger_threshold": 0.7}
+        daemon.config = MagicMock()
+        daemon.config.drives.trigger_threshold = 0.7
+        daemon.config.drives.pressure_rate = 0.01
+        daemon.config.openclaw.min_trigger_interval = 1_200
+        daemon.config.openclaw.max_turns_per_hour = 10
+
+        daemon._persist_applied_mutation_overrides(
+            [{"status": "applied", "type": "adjust_weight"}]
+        )
+
+        daemon.state.set.assert_not_called()
+
+    def test_explicit_cooldown_mutation_still_persists(self):
+        from pulse.src.core.daemon import PulseDaemon
+
+        daemon = PulseDaemon.__new__(PulseDaemon)
+        daemon.state = MagicMock()
+        daemon.state.get.return_value = {"trigger_threshold": 0.7}
+        daemon.config = MagicMock()
+        daemon.config.drives.trigger_threshold = 0.7
+        daemon.config.drives.pressure_rate = 0.01
+        daemon.config.openclaw.min_trigger_interval = 900
+        daemon.config.openclaw.max_turns_per_hour = 10
+
+        daemon._persist_applied_mutation_overrides(
+            [{"status": "applied", "type": "adjust_cooldown"}]
+        )
+
+        daemon.state.set.assert_called_once_with(
+            "config_overrides",
+            {"trigger_threshold": 0.7, "min_trigger_interval": 900},
+        )
+
+    def test_explicit_turn_limit_mutation_still_persists(self):
+        from pulse.src.core.daemon import PulseDaemon
+
+        daemon = PulseDaemon.__new__(PulseDaemon)
+        daemon.state = MagicMock()
+        daemon.state.get.return_value = {}
+        daemon.config = MagicMock()
+        daemon.config.drives.trigger_threshold = 0.7
+        daemon.config.drives.pressure_rate = 0.01
+        daemon.config.openclaw.min_trigger_interval = 1_200
+        daemon.config.openclaw.max_turns_per_hour = 12
+
+        daemon._persist_applied_mutation_overrides(
+            [{"status": "applied", "type": "adjust_turns_per_hour"}]
+        )
+
+        daemon.state.set.assert_called_once_with(
+            "config_overrides", {"max_turns_per_hour": 12}
         )
 
 

@@ -92,7 +92,9 @@ class PulseDaemon:
         self._pid_fd = None  # file descriptor for PID lock
         self._last_generate_time: float = 0.0  # track GENERATE step timing
         self._shutdown_event: asyncio.Event | None = None
-        self.runtime_bridge = None  # set by HypostasRuntime.start() if Phase 1 is active
+        self.runtime_bridge = (
+            None  # set by HypostasRuntime.start() if Phase 1 is active
+        )
 
         # Core components
         self.state = StatePersistence(self.config)
@@ -252,6 +254,8 @@ class PulseDaemon:
                 ]
             logger.info(f"Restored config overrides: {overrides}")
 
+        self._restore_last_trigger_time()
+
         try:
             logger.info("Entering main loop...")
             while self.running:
@@ -380,15 +384,7 @@ class PulseDaemon:
                             if r.get("status") == "applied":
                                 self.bus.emit(MUTATION_APPLIED, result=r)
                         # Persist config overrides so mutations survive restarts
-                        self.state.set(
-                            "config_overrides",
-                            {
-                                "trigger_threshold": self.config.drives.trigger_threshold,
-                                "pressure_rate": self.config.drives.pressure_rate,
-                                "min_trigger_interval": self.config.openclaw.min_trigger_interval,
-                                "max_turns_per_hour": self.config.openclaw.max_turns_per_hour,
-                            },
-                        )
+                        self._persist_applied_mutation_overrides(mutation_results)
                         self.state.set("drives", self.drives.save_state())
                         self.state.save()
 
@@ -434,7 +430,9 @@ class PulseDaemon:
                 sleep_time = max(0, self.config.daemon.loop_interval_seconds - elapsed)
                 if sleep_time > 0:
                     try:
-                        await asyncio.wait_for(self._shutdown_event.wait(), timeout=sleep_time)
+                        await asyncio.wait_for(
+                            self._shutdown_event.wait(), timeout=sleep_time
+                        )
                     except asyncio.TimeoutError:
                         pass
         finally:
@@ -559,9 +557,15 @@ class PulseDaemon:
         """Resolve a trigger mechanically without waking the agent/model."""
         feedback = suppression.get("feedback") or {}
         top_drive_name = decision.top_drive.name if decision.top_drive else None
-        drives_addressed = feedback.get("drives_addressed") or ([top_drive_name] if top_drive_name else [])
+        drives_addressed = feedback.get("drives_addressed") or (
+            [top_drive_name] if top_drive_name else []
+        )
         outcome = feedback.get("outcome", "success")
-        summary = feedback.get("summary") or suppression.get("reason") or "suppressed by integration preflight"
+        summary = (
+            feedback.get("summary")
+            or suppression.get("reason")
+            or "suppressed by integration preflight"
+        )
         decay_overrides = feedback.get("decay_overrides", {})
 
         now = time.time()
@@ -585,7 +589,9 @@ class PulseDaemon:
             if hasattr(self, "feedback_learner"):
                 self.feedback_learner.record(drive_name, before, outcome)
                 config_base = self.drives.config_weight(drive_name)
-                drive.weight = self.feedback_learner.effective_weight(drive_name, config_base)
+                drive.weight = self.feedback_learner.effective_weight(
+                    drive_name, config_base
+                )
 
         self.state.set("drives", self.drives.save_state())
         self.state.save()
@@ -667,9 +673,7 @@ class PulseDaemon:
                     # multiplied the already-adjusted weight by the learner
                     # multiplier again, producing weights in the hundreds or
                     # thousands after ~30 failure cycles (1.3^27 ≈ 994×).
-                    self.feedback_learner.record(
-                        drive_name, drive.pressure, outcome
-                    )
+                    self.feedback_learner.record(drive_name, drive.pressure, outcome)
                     config_base = self.drives.config_weight(drive_name)
                     drive.weight = self.feedback_learner.effective_weight(
                         drive_name, config_base
@@ -829,7 +833,9 @@ class PulseDaemon:
             "hour_utc": datetime.now(timezone.utc).hour,
         }
 
-    def _run_matching_instincts(self, drives_dict: dict[str, float], context: dict) -> bool:
+    def _run_matching_instincts(
+        self, drives_dict: dict[str, float], context: dict
+    ) -> bool:
         """Fire ready instincts before falling back to GENERATE."""
         if not self.instinct_registry or not self.instinct_executor:
             return False
@@ -897,6 +903,55 @@ class PulseDaemon:
     def _build_trigger_message(self, decision) -> str:
         """Build the agent prompt via the active integration."""
         return self.integration.build_trigger_message(decision, self.config)
+
+    def _restore_last_trigger_time(self) -> None:
+        """Restore cooldown continuity from the last real trigger, not process start."""
+        now = time.time()
+        last_trigger = self.state.get("last_trigger")
+        persisted = (
+            last_trigger.get("timestamp") if isinstance(last_trigger, dict) else None
+        )
+        if isinstance(persisted, (int, float)) and 0 < persisted <= now:
+            self.last_trigger_time = float(persisted)
+            self._turn_timestamps = (
+                [self.last_trigger_time] if self.last_trigger_time > now - 3600 else []
+            )
+            return
+
+        cooldown = max(0, self.config.openclaw.min_trigger_interval)
+        self.last_trigger_time = now - cooldown
+        self._turn_timestamps = []
+
+    def _persist_applied_mutation_overrides(self, mutation_results: list[dict]) -> None:
+        """Persist only policy keys deliberately changed by applied mutations."""
+        override_values = {
+            "adjust_threshold": (
+                "trigger_threshold",
+                self.config.drives.trigger_threshold,
+            ),
+            "adjust_rate": ("pressure_rate", self.config.drives.pressure_rate),
+            "adjust_cooldown": (
+                "min_trigger_interval",
+                self.config.openclaw.min_trigger_interval,
+            ),
+            "adjust_turns_per_hour": (
+                "max_turns_per_hour",
+                self.config.openclaw.max_turns_per_hour,
+            ),
+        }
+        overrides = dict(self.state.get("config_overrides", {}) or {})
+        changed = False
+        for result in mutation_results:
+            if result.get("status") != "applied":
+                continue
+            key_value = override_values.get(result.get("type"))
+            if key_value is None:
+                continue
+            key, value = key_value
+            overrides[key] = value
+            changed = True
+        if changed:
+            self.state.set("config_overrides", overrides)
 
     def _can_trigger(self) -> bool:
         """Check rate limits and cooldowns."""
