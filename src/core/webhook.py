@@ -2,7 +2,7 @@
 OpenClaw Webhook — the bridge between Pulse and the agent.
 
 Supports two session modes:
-- "main": Injects message into the main session (original behavior)
+- "main"/"persistent": Reuses the configured OpenClaw session
 - "isolated": Spawns a separate hook session that doesn't compete with
   the main conversation. Results can be announced back to the channel.
 
@@ -78,27 +78,7 @@ class OpenClawWebhook:
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
 
-        payload = {
-            "message": message,
-            "name": name,
-            "wakeMode": "now",
-            "deliver": self.deliver,
-        }
-
-        result_callback_kind = self._result_callback_kind(message)
-        if result_callback_kind:
-            payload["resultCallback"] = {
-                "url": self.result_callback_url,
-                "kind": result_callback_kind,
-            }
-            if self.token:
-                payload["resultCallback"]["token"] = self.token
-
-        # In main mode, use explicit sessionKey from config (как у ambient)
-        if self.session_mode == "main" and self.session_key:
-            payload["sessionKey"] = self.session_key
-            payload["channel"] = "telegram"
-            payload["to"] = "312058326"
+        payload = self._build_payload(message=message, name=name)
 
         # DEBUG: логируем точный payload до отправки (включая sessionKey/channel/to)
         try:
@@ -106,12 +86,6 @@ class OpenClawWebhook:
             logger.info("[PULSE→HOOK] url=%s headers=%s payload_json=%s", self.url, safe_headers, json.dumps(payload, ensure_ascii=False))
         except Exception as log_err:
             logger.warning(f"Failed to log webhook payload: {log_err}")
-
-        # In isolated mode, tell OpenClaw to spawn a separate session
-        if self.session_mode == "isolated":
-            payload["isolated"] = True
-            if self.isolated_model:
-                payload["model"] = self.isolated_model
 
         try:
             async with session.post(
@@ -129,7 +103,7 @@ class OpenClawWebhook:
                     except Exception:
                         pass
                     mode_str = (
-                        f"isolated" if self.session_mode == "isolated" else "main"
+                        "isolated" if self.session_mode == "isolated" else "persistent"
                     )
                     logger.info(
                         f"Webhook accepted (202) — mode={mode_str}"
@@ -147,6 +121,36 @@ class OpenClawWebhook:
         except Exception as e:
             logger.error(f"Webhook unexpected error: {e}")
             return False
+
+    def _build_payload(self, message: str, name: str) -> dict:
+        """Translate Pulse session semantics to the current OpenClaw hook API."""
+        payload = {
+            "message": message,
+            "name": name,
+            "wakeMode": "now",
+            "deliver": self.deliver,
+        }
+
+        result_callback_kind = self._result_callback_kind(message)
+        if result_callback_kind:
+            payload["resultCallback"] = {
+                "url": self.result_callback_url,
+                "kind": result_callback_kind,
+            }
+            if self.token:
+                payload["resultCallback"]["token"] = self.token
+
+        # "main" is Pulse's legacy name for OpenClaw's persistent hook session.
+        if self.session_mode in {"main", "persistent"}:
+            payload["sessionMode"] = "persistent"
+            payload["sessionKey"] = self.session_key
+            payload["channel"] = "telegram"
+            payload["to"] = "312058326"
+        else:
+            payload["sessionMode"] = "isolated"
+            if self.isolated_model:
+                payload["model"] = self.isolated_model
+        return payload
 
     def _result_callback_kind(self, message: str) -> str | None:
         if "EMOTIONAL LANDSCAPE" in message and "- Mode: write_diary_note" in message:

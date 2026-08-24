@@ -17,7 +17,8 @@ class OpenClawConfig:
     message_prefix: str = "[PULSE]"
     max_turns_per_hour: int = 10
     min_trigger_interval: int = 300  # seconds
-    # Session mode: "main" = inject into main session, "isolated" = spawn separate session
+    # Session mode: "main" is a legacy alias for OpenClaw "persistent";
+    # "isolated" spawns a fresh hook session.
     session_mode: str = "isolated"
     # Delivery: announce results back to channel (only applies in isolated mode)
     deliver: bool = True
@@ -730,6 +731,18 @@ class PulseConfig:
             errors.append("openclaw.max_turns_per_hour must be >= 1")
         if self.openclaw.min_trigger_interval < 0:
             errors.append("openclaw.min_trigger_interval must be non-negative")
+        if self.openclaw.session_mode not in ("main", "persistent", "isolated"):
+            errors.append(
+                "openclaw.session_mode must be 'main', 'persistent', or 'isolated', "
+                f"got '{self.openclaw.session_mode}'"
+            )
+        if (
+            self.openclaw.session_mode in ("main", "persistent")
+            and not self.openclaw.session_key
+        ):
+            errors.append(
+                "openclaw.session_key is required when session_mode is main or persistent"
+            )
         if self.evaluator.mode not in ("rules", "model"):
             errors.append(
                 f"evaluator.mode must be 'rules' or 'model', got '{self.evaluator.mode}'"

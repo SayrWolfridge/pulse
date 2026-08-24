@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 
 import yaml
+import pytest
 
 # Adjust import path
 import sys
@@ -61,6 +62,13 @@ class TestConfigDefaults:
     def test_default_max_turns_per_hour(self):
         config = PulseConfig()
         assert config.openclaw.max_turns_per_hour == 10
+
+    def test_persistent_session_requires_session_key(self):
+        config = PulseConfig()
+        config.openclaw.session_mode = "main"
+
+        with pytest.raises(ValueError, match="session_key is required"):
+            config._validate()
 
 
 class TestConfigFromYaml:
