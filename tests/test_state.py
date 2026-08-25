@@ -3,6 +3,7 @@
 import json
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import sys
 
@@ -61,3 +62,53 @@ class TestStatePersistence:
             sp.state_file.write_text("{invalid json!!")
             sp.load()
             assert sp._data == {}
+
+    def test_drive_diversity_bootstraps_from_successful_history(self):
+        with tempfile.TemporaryDirectory() as d:
+            sp = self._make_persistence(d)
+            sp.history_file.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"top_drive": "health", "success": True}),
+                        json.dumps({"top_drive": "goals", "success": False}),
+                        json.dumps({"top_drive": "emotions", "success": True}),
+                    ]
+                )
+                + "\n"
+            )
+            sp.load()
+
+            assert sp.recent_successful_top_drives() == ["health", "emotions"]
+
+    def test_failed_trigger_does_not_advance_drive_diversity_window(self):
+        with tempfile.TemporaryDirectory() as d:
+            sp = self._make_persistence(d)
+            sp.load()
+            sp.set("recent_successful_top_drives", ["health", "emotions"])
+            failed = SimpleNamespace(
+                reason="test",
+                total_pressure=1.0,
+                top_drive=SimpleNamespace(name="goals"),
+            )
+
+            sp.log_trigger(failed, success=False)
+
+            assert sp.recent_successful_top_drives() == ["health", "emotions"]
+
+    def test_successful_trigger_advances_and_persists_drive_diversity_window(self):
+        with tempfile.TemporaryDirectory() as d:
+            sp = self._make_persistence(d)
+            sp.load()
+            sp.set("recent_successful_top_drives", ["health", "emotions"])
+            success = SimpleNamespace(
+                reason="test",
+                total_pressure=1.0,
+                top_drive=SimpleNamespace(name="goals"),
+            )
+
+            sp.log_trigger(success, success=True)
+            sp.save()
+            restored = self._make_persistence(d)
+            restored.load()
+
+            assert restored.recent_successful_top_drives() == ["emotions", "goals"]

@@ -13,6 +13,7 @@ import logging
 import os
 import tempfile
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -24,6 +25,9 @@ logger = logging.getLogger("pulse.state")
 
 class StatePersistence:
     """Manages persistent state across daemon restarts."""
+
+    RECENT_SUCCESSFUL_TOP_DRIVES_KEY = "recent_successful_top_drives"
+    DEFAULT_DRIVE_DIVERSITY_WINDOW = 2
 
     def __init__(self, config: PulseConfig):
         self.config = config
@@ -144,6 +148,52 @@ class StatePersistence:
         self._data[key] = value
         self._dirty = True
 
+    def recent_successful_top_drives(
+        self, limit: int = DEFAULT_DRIVE_DIVERSITY_WINDOW
+    ) -> list[str]:
+        """Return the persisted successful-drive diversity window.
+
+        Old state files do not contain the additive cache, so bootstrap it from
+        the retained trigger history. Raw drive pressure is deliberately not
+        changed here; this state only affects the next candidate selection.
+        """
+        limit = max(0, int(limit))
+        if limit == 0:
+            return []
+
+        stored = self._data.get(self.RECENT_SUCCESSFUL_TOP_DRIVES_KEY)
+        if isinstance(stored, list):
+            recent = [name for name in stored if isinstance(name, str) and name]
+        else:
+            recent = self._load_recent_successful_top_drives(limit)
+            self._data[self.RECENT_SUCCESSFUL_TOP_DRIVES_KEY] = recent
+            self._dirty = True
+
+        return recent[-limit:]
+
+    def _load_recent_successful_top_drives(self, limit: int) -> list[str]:
+        recent: deque[str] = deque(maxlen=limit)
+        if not self.history_file.exists():
+            return []
+
+        try:
+            with open(self.history_file) as history:
+                for line in history:
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    drive_name = entry.get("top_drive")
+                    if (
+                        entry.get("success") is True
+                        and isinstance(drive_name, str)
+                        and drive_name
+                    ):
+                        recent.append(drive_name)
+        except OSError as exc:
+            logger.warning(f"Failed to bootstrap drive diversity history: {exc}")
+        return list(recent)
+
     def log_trigger(self, decision, success: bool):
         """Log a trigger event to history."""
         entry = {
@@ -153,6 +203,14 @@ class StatePersistence:
             "top_drive": decision.top_drive.name if decision.top_drive else None,
             "success": success,
         }
+
+        recent_successful_drives = None
+        if success and entry["top_drive"]:
+            recent_successful_drives = self.recent_successful_top_drives()
+            recent_successful_drives.append(entry["top_drive"])
+            recent_successful_drives = recent_successful_drives[
+                -self.DEFAULT_DRIVE_DIVERSITY_WINDOW :
+            ]
 
         # Append to JSONL history (rotate if > 5MB)
         try:
@@ -170,6 +228,10 @@ class StatePersistence:
         if success:
             success_count = self._data.get("successful_triggers", 0)
             self._data["successful_triggers"] = success_count + 1
+            if recent_successful_drives is not None:
+                self._data[self.RECENT_SUCCESSFUL_TOP_DRIVES_KEY] = (
+                    recent_successful_drives
+                )
 
         self._dirty = True
 

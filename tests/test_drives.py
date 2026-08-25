@@ -107,6 +107,32 @@ class TestDriveState:
         # Should be monotonically increasing
         assert all(pressures[i] <= pressures[i + 1] for i in range(len(pressures) - 1))
 
+    def test_evaluation_state_excludes_recent_drives_without_mutating_pressure(self):
+        health = Drive(name="health", category="health", pressure=4.0)
+        emotions = Drive(name="emotions", category="emotions", pressure=3.0)
+        goals = Drive(name="goals", category="goals", pressure=2.0)
+        state = DriveState(drives=[health, emotions, goals], timestamp=time.time())
+
+        selected = DriveEngine.evaluation_state(state, ["health", "emotions"])
+
+        assert selected.top_drive is goals
+        assert selected.total_pressure == 2.0
+        assert health.pressure == 4.0
+        assert emotions.pressure == 3.0
+        assert state.top_drive is health
+
+    def test_evaluation_state_is_empty_when_only_recent_drives_are_actionable(
+        self,
+    ):
+        health = Drive(name="health", category="health", pressure=4.0)
+        state = DriveState(drives=[health], timestamp=time.time())
+
+        selected = DriveEngine.evaluation_state(state, ["health"])
+
+        assert selected.drives == []
+        assert selected.top_drive is None
+        assert selected.total_pressure == 0.0
+
 
 class TestEveningCultureDrive:
     """Tests for the soft evening culture-talk drive."""

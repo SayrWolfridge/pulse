@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from pulse.src.core.config import PulseConfig
-from pulse.src.drives.engine import DriveEngine
+from pulse.src.drives.engine import DriveEngine, DriveState
 from pulse.src.sensors.manager import SensorManager
 from pulse.src.evaluator.priority import PriorityEvaluator, TriggerDecision
 from pulse.src.evaluator.model import ModelEvaluator, ModelConfig
@@ -79,6 +79,8 @@ def _load_integration(name: str) -> Integration:
 
 class PulseDaemon:
     """Main daemon process — the nervous system."""
+
+    DRIVE_DIVERSITY_WINDOW = 2
 
     def __init__(
         self, config: Optional[PulseConfig] = None, config_path: Optional[str] = None
@@ -163,6 +165,26 @@ class PulseDaemon:
         else:
             self.evaluator = PriorityEvaluator(self.config)
             self._model_evaluator = False
+
+    def _evaluation_drive_state(
+        self, drive_state: DriveState, sensor_data: dict
+    ) -> DriveState:
+        """Exclude the last two successfully spoken drives from normal selection."""
+        alerts = sensor_data.get("system", {}).get("alerts", [])
+        if any(alert.get("severity") == "high" for alert in alerts):
+            return drive_state
+
+        excluded = self.state.recent_successful_top_drives(
+            limit=self.DRIVE_DIVERSITY_WINDOW
+        )
+        evaluation_state = DriveEngine.evaluation_state(drive_state, excluded)
+        if excluded:
+            logger.debug(
+                "DRIVE DIVERSITY: excluded=%s eligible=%s",
+                excluded,
+                [drive.name for drive in evaluation_state.drives],
+            )
+        return evaluation_state
 
     def run(self):
         """Start the daemon. Blocks until shutdown."""
@@ -303,14 +325,20 @@ class PulseDaemon:
                         except Exception as e:
                             logger.warning(f"NervousSystem pre_evaluate failed: {e}")
 
+                    evaluation_drive_state = self._evaluation_drive_state(
+                        drive_state, sensor_data
+                    )
+
                     # EVALUATE — should we trigger an agent turn?
                     if self._model_evaluator:
                         working_memory = self._load_working_memory()
                         decision = await self.evaluator.evaluate(
-                            drive_state, sensor_data, working_memory
+                            evaluation_drive_state, sensor_data, working_memory
                         )
                     else:
-                        decision = self.evaluator.evaluate(drive_state, sensor_data)
+                        decision = self.evaluator.evaluate(
+                            evaluation_drive_state, sensor_data
+                        )
                     logger.info(
                         f"EVAL: trigger={decision.should_trigger}, reason={decision.reason[:80]}"
                     )
@@ -322,10 +350,13 @@ class PulseDaemon:
                     # firing on ambient noise from many low-pressure drives.
                     if (
                         not decision.should_trigger
-                        and drive_state.total_pressure > 10.0
+                        and evaluation_drive_state.total_pressure > 10.0
                     ):
                         max_individual = max(
-                            (d.weighted_pressure for d in drive_state.drives),
+                            (
+                                d.weighted_pressure
+                                for d in evaluation_drive_state.drives
+                            ),
                             default=0.0,
                         )
                         time_since_trigger = time.time() - self.last_trigger_time
@@ -335,13 +366,13 @@ class PulseDaemon:
                             > self.config.drives.override_min_individual_pressure
                         ):
                             logger.info(
-                                f"🔥 HIGH-PRESSURE OVERRIDE — pressure={drive_state.total_pressure:.1f}, "
+                                f"🔥 HIGH-PRESSURE OVERRIDE — pressure={evaluation_drive_state.total_pressure:.1f}, "
                                 f"max_individual={max_individual:.2f}, "
                                 f"last_trigger={time_since_trigger:.0f}s ago. Forcing trigger."
                             )
                             decision.should_trigger = True
                             decision.reason = (
-                                f"high_pressure_override: pressure={drive_state.total_pressure:.1f}, "
+                                f"high_pressure_override: pressure={evaluation_drive_state.total_pressure:.1f}, "
                                 f"max_individual={max_individual:.2f}, idle={time_since_trigger:.0f}s"
                             )
 

@@ -99,6 +99,21 @@ class DriveEngine:
     GROWTH_MATERIAL_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/growth-material.json")
     GROWTH_MATERIAL_PROMPT_PRESSURE = 0.8
 
+    @staticmethod
+    def evaluation_state(
+        drive_state: DriveState, excluded_drive_names: list[str]
+    ) -> DriveState:
+        """Build a non-mutating evaluator view without recently spoken drives."""
+        excluded = {name for name in excluded_drive_names if name}
+        if not excluded:
+            return drive_state
+        return DriveState(
+            drives=[
+                drive for drive in drive_state.drives if drive.name not in excluded
+            ],
+            timestamp=drive_state.timestamp,
+        )
+
     def __init__(self, config: PulseConfig, state: StatePersistence):
         self.config = config
         self.state = state

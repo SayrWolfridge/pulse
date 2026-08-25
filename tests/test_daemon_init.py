@@ -196,6 +196,46 @@ class TestCooldownContinuity:
         )
 
 
+class TestDriveDiversitySelection:
+    def test_normal_selection_excludes_last_two_successful_drives(self):
+        from pulse.src.core.daemon import PulseDaemon
+        from pulse.src.drives.engine import Drive, DriveState
+
+        daemon = PulseDaemon.__new__(PulseDaemon)
+        daemon.state = MagicMock()
+        daemon.state.recent_successful_top_drives.return_value = [
+            "health",
+            "emotions",
+        ]
+        health = Drive(name="health", category="health", pressure=4.0)
+        emotions = Drive(name="emotions", category="emotions", pressure=3.0)
+        goals = Drive(name="goals", category="goals", pressure=2.0)
+        state = DriveState(drives=[health, emotions, goals], timestamp=time.time())
+
+        selected = daemon._evaluation_drive_state(state, {"system": {"alerts": []}})
+
+        assert selected.top_drive is goals
+        assert state.top_drive is health
+
+    def test_critical_system_alert_bypasses_drive_diversity(self):
+        from pulse.src.core.daemon import PulseDaemon
+        from pulse.src.drives.engine import Drive, DriveState
+
+        daemon = PulseDaemon.__new__(PulseDaemon)
+        daemon.state = MagicMock()
+        state = DriveState(
+            drives=[Drive(name="health", category="health", pressure=4.0)],
+            timestamp=time.time(),
+        )
+
+        selected = daemon._evaluation_drive_state(
+            state,
+            {"system": {"alerts": [{"severity": "high", "type": "disk"}]}},
+        )
+
+        assert selected is state
+        daemon.state.recent_successful_top_drives.assert_not_called()
+
 class TestShutdownWake:
     """Verify SIGTERM handler wakes the async loop instead of waiting full interval."""
 
