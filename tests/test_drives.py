@@ -1018,7 +1018,7 @@ class TestHealthStateBridgeRefresh:
             "fs.writeFileSync('pulse/self/health-state.json', JSON.stringify({ date: '2026-06-14', accepted_entries_today: 0 }));\n",
             encoding="utf-8",
         )
-        rules_path = tmp_path / "pulse" / "self" / "health-rules.json"
+        rules_path = tmp_path / "skills" / "health-diary" / "config" / "pulse-health-rules.json"
         rules_path.parent.mkdir(parents=True, exist_ok=True)
         rules_path.write_text(
             '{"enabled":true,"rules":[{"id":"no_food","once_per_day":false,'
@@ -1037,7 +1037,7 @@ class TestHealthStateBridgeRefresh:
         bridge_path = tmp_path / "scripts" / "health-diary-health-state-bridge.mjs"
         bridge_path.parent.mkdir(parents=True)
         bridge_path.write_text("process.exit(2);\n", encoding="utf-8")
-        rules_path = tmp_path / "pulse" / "self" / "health-rules.json"
+        rules_path = tmp_path / "skills" / "health-diary" / "config" / "pulse-health-rules.json"
         rules_path.parent.mkdir(parents=True, exist_ok=True)
         rules_path.write_text('{"enabled":true,"rules":[]}', encoding="utf-8")
         state_path = tmp_path / "pulse" / "self" / "health-state.json"
@@ -1048,6 +1048,87 @@ class TestHealthStateBridgeRefresh:
         assert engine.drives["health"].pressure == 0.5
         assert engine.drives["health"].source_data["rule_id"] == "health_state_bridge_failed"
         assert "сегодняшний текстовый дневник" in engine.drives["health"].source_data["message"]
+
+    def test_health_food_hold_decays_once_and_blocks_food_rule(self, tmp_path):
+        import json
+
+        engine = self._make_engine(tmp_path)
+        bridge_path = tmp_path / "scripts" / "health-diary-health-state-bridge.mjs"
+        bridge_path.parent.mkdir(parents=True)
+        bridge_path.write_text(
+            "import fs from 'fs';\n"
+            "fs.mkdirSync('pulse/self', { recursive: true });\n"
+            "fs.writeFileSync('pulse/self/health-state.json', JSON.stringify({ meals_substantial: 1 }));\n",
+            encoding="utf-8",
+        )
+        rules_path = tmp_path / "skills" / "health-diary" / "config" / "pulse-health-rules.json"
+        rules_path.parent.mkdir(parents=True, exist_ok=True)
+        rules_path.write_text(
+            '{"enabled":true,"rules":[{"id":"low_food","once_per_day":false,'
+            '"conditions":[{"field":"meals_substantial","op":"<","value":2}],'
+            '"effect":{"drive":"health_food","pressure_delta":0.7,"message":"food"}}]}',
+            encoding="utf-8",
+        )
+        context_path = tmp_path / "pulse" / "self" / "health-food-context.json"
+        context_path.parent.mkdir(parents=True, exist_ok=True)
+        context_path.write_text(
+            json.dumps(
+                {
+                    "status": "deferred",
+                    "accepted_at": "2026-08-30T12:00:00+03:00",
+                    "hold_until": "2999-08-30T14:00:00+03:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+        health_food = engine.drives["health_food"] = Drive(
+            name="health_food", category="health", pressure=1.0, weight=0.7
+        )
+
+        engine._refresh_health_rules()
+        assert health_food.pressure == 0.6
+        engine._refresh_health_rules()
+        assert health_food.pressure == 0.6
+
+        context_path.write_text(
+            json.dumps(
+                {
+                    "status": "deferred",
+                    "accepted_at": "2026-08-29T12:00:00+03:00",
+                    "hold_until": "2026-08-29T14:00:00+03:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+        engine._refresh_health_rules()
+        assert health_food.pressure == pytest.approx(1.3)
+
+        bridge_path.write_text(
+            "import fs from 'fs';\n"
+            "fs.mkdirSync('pulse/self', { recursive: true });\n"
+            "fs.writeFileSync('pulse/self/health-state.json', JSON.stringify({ meals_substantial: 2 }));\n",
+            encoding="utf-8",
+        )
+        engine._refresh_health_rules()
+        assert health_food.pressure == pytest.approx(1.3)
+
+    def test_health_drives_are_source_driven_not_time_driven(self, tmp_path, monkeypatch):
+        engine = self._make_engine(tmp_path)
+        engine.config.drives.pressure_rate = 1.0
+        engine.config.drives.max_pressure = 5.0
+        engine.last_tick_time = 100.0
+        health_food = engine.drives["health_food"] = Drive(
+            name="health_food", category="health", pressure=0.7, weight=0.7
+        )
+        monkeypatch.setattr("pulse.src.drives.engine.time.time", lambda: 700.0)
+        monkeypatch.setattr(engine, "_apply_sensor_spikes", lambda data: None)
+        monkeypatch.setattr(engine, "_refresh_evening_culture_drive", lambda dt: None)
+        monkeypatch.setattr(engine, "_refresh_evening_culture_refill_drive", lambda dt: None)
+        monkeypatch.setattr(engine, "_apply_circadian_weight_modifiers", lambda: None)
+
+        engine.tick({})
+
+        assert health_food.pressure == 0.7
 
 
 class TestDriveEngineWeightDrift:

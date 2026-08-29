@@ -36,7 +36,7 @@ def _patch_health_check(monkeypatch, tmp_path, data):
     return SayrHealthDiaryIntegration()
 
 
-def test_food_line_repeats_hourly_while_meals_are_still_missing(monkeypatch, tmp_path):
+def test_food_line_is_quiet_for_two_hours_then_can_return(monkeypatch, tmp_path):
     data = {
         "has_real_food_today": True,
         "food_grace_active": False,
@@ -53,9 +53,13 @@ def test_food_line_repeats_hourly_while_meals_are_still_missing(monkeypatch, tmp
 
     monkeypatch.setattr("pulse.src.integrations.sayr.health_diary.time.time", lambda: 1000.0 + 3600)
     second = integration._build_health_block(record_food_reminder=True)
-    assert "Нормальных приёмов пищи пока: 1" in second
-    assert "Еду уже поднимал недавно" not in second
-    assert "Запись про сон сегодня ещё не видна" in second
+    assert "Нормальных приёмов пищи пока: 1" not in second
+    assert "Запись про сон сегодня ещё не видна" not in second
+
+    monkeypatch.setattr("pulse.src.integrations.sayr.health_diary.time.time", lambda: 1000.0 + 7200)
+    third = integration._build_health_block(record_food_reminder=True)
+    assert "Нормальных приёмов пищи пока: 1" in third
+    assert "Запись про сон сегодня ещё не видна" in third
 
 
 def test_food_preflight_does_not_create_cooldown_state(monkeypatch, tmp_path):
@@ -110,6 +114,27 @@ def test_recent_substantial_meal_suppresses_low_food_nudge(monkeypatch, tmp_path
     block = integration._build_health_block(record_food_reminder=True)
     assert "Нормальных приёмов пищи пока: 1" not in block
     assert block == ""
+
+
+def test_health_food_drive_builds_only_food_and_requires_dialogue(monkeypatch, tmp_path):
+    data = {
+        "has_real_food_today": True,
+        "food_grace_active": False,
+        "meal_grace_active": False,
+        "meals_substantial": 1,
+        "sleep_logged": False,
+    }
+    integration = _patch_health_check(monkeypatch, tmp_path, data)
+
+    block = integration._build_health_block(
+        record_food_reminder=True,
+        only_kind="food",
+    )
+
+    assert "Нормальных приёмов пищи пока: 1" in block
+    assert "не завершай вызванный Pulse ход молча" in block
+    assert "defer-food-pressure.py --hours 2" in block
+    assert "Запись про сон" not in block
 
 
 def test_emotions_build_reuses_suppress_preflight_verdict(monkeypatch):

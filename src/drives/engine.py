@@ -95,6 +95,9 @@ class DriveEngine:
     EVENING_CULTURE_REFILL_THRESHOLD = 5
     EVENING_CULTURE_REFILL_COOLDOWN_SECONDS = 18 * 60 * 60
     HEALTH_TRIGGER_SUCCESS_DECAY_FRACTION = 0.4
+    HEALTH_FOOD_DRIVE = "health_food"
+    HEALTH_FOOD_CONTEXT_FILE = "pulse/self/health-food-context.json"
+    HEALTH_FOOD_HOLD_DECAY_FRACTION = 0.4
     EVENING_CULTURE_TRIGGER_SUCCESS_DECAY_FRACTION = 0.35
     GROWTH_MATERIAL_PATH = Path("/home/lisa/.openclaw/workspace/pulse/self/growth-material.json")
     GROWTH_MATERIAL_PROMPT_PRESSURE = 0.8
@@ -144,7 +147,13 @@ class DriveEngine:
         no config entry. This is intentionally conservative — never returns
         an accumulated/drifted value.
         """
+        if drive_name.startswith("health_"):
+            return self._config_weights.get("health", 0.7)
         return self._config_weights.get(drive_name, 1.0)
+
+    @staticmethod
+    def _is_health_drive(drive_name: str) -> bool:
+        return drive_name == "health" or drive_name.startswith("health_")
 
     def tick(self, sensor_data: dict) -> DriveState:
         """
@@ -165,6 +174,7 @@ class DriveEngine:
             # time passed; it needs concrete material.
             if (
                 self._is_git_drive(drive.name)
+                or self._is_health_drive(drive.name)
                 or drive.name in {"growth", "runtime_backup"}
                 or drive.name == self.EVENING_CULTURE_REFILL_DRIVE
             ):
@@ -276,7 +286,8 @@ class DriveEngine:
                 "growth": 0.40,
             },
         }
-        return modifiers.get(profile, {}).get(drive_name, 1.0)
+        modifier_name = "health" if drive_name.startswith("health_") else drive_name
+        return modifiers.get(profile, {}).get(modifier_name, 1.0)
 
     def effective_weight(self, drive_name: str, base_weight: float) -> float:
         """Apply the circadian daypart multiplier to a base/effective weight."""
@@ -1325,10 +1336,64 @@ class DriveEngine:
         except Exception as exc:
             logger.debug("Health-state bridge failure thalamus append failed: %s", exc)
 
+    def _health_food_hold_active(self, workspace_root: Path, *, now: datetime) -> bool:
+        """Apply a Lisa-confirmed food deferral once and keep it active for its exact window."""
+        context_path = workspace_root / self.HEALTH_FOOD_CONTEXT_FILE
+        try:
+            context = json.loads(context_path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+
+        if context.get("status") != "deferred":
+            return False
+        hold_until = self._parse_iso_timestamp(context.get("hold_until"))
+        accepted_at = self._parse_iso_timestamp(context.get("accepted_at"))
+        if hold_until is None or accepted_at is None or now >= hold_until:
+            return False
+
+        drive = self.drives.get(self.HEALTH_FOOD_DRIVE)
+        if drive is None:
+            drive = self.drives[self.HEALTH_FOOD_DRIVE] = Drive(
+                name=self.HEALTH_FOOD_DRIVE,
+                category="health",
+                weight=self.config_weight(self.HEALTH_FOOD_DRIVE),
+            )
+
+        applied_path = Path(self.config.state.dir).expanduser() / "health-food-hold-applied.json"
+        applied = {}
+        try:
+            applied = json.loads(applied_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        accepted_token = context.get("accepted_at")
+        if applied.get("accepted_at") != accepted_token:
+            before = drive.pressure
+            drive.decay(drive.pressure * self.HEALTH_FOOD_HOLD_DECAY_FRACTION)
+            drive.last_addressed = now.timestamp()
+            applied_path.parent.mkdir(parents=True, exist_ok=True)
+            applied_path.write_text(
+                json.dumps(
+                    {
+                        "accepted_at": accepted_token,
+                        "hold_until": context.get("hold_until"),
+                        "pressure_before": round(before, 4),
+                        "pressure_after": round(drive.pressure, 4),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        return True
+
     def _refresh_health_rules(self):
         workspace = self.config.workspace
         workspace_root = Path(str(workspace.root)).expanduser()
-        rules_path = workspace_root / "pulse/self/health-rules.json"
+        rules_path = workspace_root / "skills/health-diary/config/pulse-health-rules.json"
+        if not rules_path.exists():
+            # Compatibility only: older workspaces kept configuration inside
+            # ignored runtime state, which made Git review and deployment drift.
+            rules_path = workspace_root / "pulse/self/health-rules.json"
         state_path = workspace_root / "pulse/self/health-state.json"
         fired_path = Path(self.config.state.dir).expanduser() / "health-rules-fired.json"
 
@@ -1351,14 +1416,16 @@ class DriveEngine:
         if not rules_doc.get("enabled", False):
             return
 
-        if "health" not in self.drives:
-            self.drives["health"] = Drive(name="health", category="health", weight=0.7)
+        for drive in self.drives.values():
+            if self._is_health_drive(drive.name):
+                drive.source_data.pop("message", None)
+                drive.source_data.pop("rule_id", None)
 
-        health_drive = self.drives["health"]
-        health_drive.source_data.pop("message", None)
-        health_drive.source_data.pop("rule_id", None)
+        now = datetime.now().astimezone()
+        food_hold_active = self._health_food_hold_active(workspace_root, now=now)
+        state_data["food_context_hold_active"] = food_hold_active
 
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = now.strftime("%Y-%m-%d")
         fired_state = {}
         if fired_path.exists():
             try:
@@ -1366,6 +1433,9 @@ class DriveEngine:
             except Exception:
                 fired_state = {}
         fired_today = set(fired_state.get(today, []))
+        cooldowns = fired_state.get("_cooldowns", {})
+        if not isinstance(cooldowns, dict):
+            cooldowns = {}
         changed_fired = False
 
         for rule in rules_doc.get("rules", []):
@@ -1374,11 +1444,25 @@ class DriveEngine:
             if rule.get("once_per_day") and rule["id"] in fired_today:
                 continue
 
+            cooldown_seconds = float(rule.get("cooldown_seconds", 0) or 0)
+            cooldown_key_fields = rule.get("cooldown_key_fields") or []
+            cooldown_key = {
+                field: state_data.get(field)
+                for field in cooldown_key_fields
+            }
+            cooldown_state = cooldowns.get(rule["id"], {})
+            if (
+                cooldown_seconds > 0
+                and cooldown_state.get("key") == cooldown_key
+                and isinstance(cooldown_state.get("fired_at"), (int, float))
+                and now.timestamp() - float(cooldown_state["fired_at"]) < cooldown_seconds
+            ):
+                continue
+
             time_after = rule.get("time_after")
             if time_after:
                 try:
                     hh, mm = map(int, str(time_after).split(":"))
-                    now = datetime.now()
                     if (now.hour, now.minute) < (hh, mm):
                         continue
                 except Exception:
@@ -1390,8 +1474,15 @@ class DriveEngine:
 
             effect = rule["effect"]
             drive_name = effect.get("drive", "health")
+            if drive_name == self.HEALTH_FOOD_DRIVE and food_hold_active:
+                continue
             if drive_name not in self.drives:
-                self.drives[drive_name] = Drive(name=drive_name, category=drive_name, weight=0.7)
+                category = "health" if self._is_health_drive(drive_name) else drive_name
+                self.drives[drive_name] = Drive(
+                    name=drive_name,
+                    category=category,
+                    weight=self.config_weight(drive_name),
+                )
             drive = self.drives[drive_name]
             delta = float(effect.get("pressure_delta", 0.0) or 0.0)
             if delta > 0:
@@ -1419,10 +1510,17 @@ class DriveEngine:
             if rule.get("once_per_day"):
                 fired_today.add(rule["id"])
                 changed_fired = True
+            if cooldown_seconds > 0:
+                cooldowns[rule["id"]] = {
+                    "fired_at": now.timestamp(),
+                    "key": cooldown_key,
+                }
+                changed_fired = True
 
         if changed_fired:
             fired_path.parent.mkdir(parents=True, exist_ok=True)
-            fired_state = {today: sorted(fired_today)}
+            fired_state[today] = sorted(fired_today)
+            fired_state["_cooldowns"] = cooldowns
             fired_path.write_text(json.dumps(fired_state, ensure_ascii=False, indent=2))
 
     def on_trigger_success(self, decision):
@@ -1471,7 +1569,7 @@ class DriveEngine:
                     top_drive.pressure = 0.0
             if top_drive.name == self.EVENING_CULTURE_REFILL_DRIVE:
                 self._mark_evening_culture_refill_addressed(now=now)
-            if top_drive.name == "health":
+            if self._is_health_drive(top_drive.name):
                 top_drive.decay(top_drive.pressure * self.HEALTH_TRIGGER_SUCCESS_DECAY_FRACTION)
             top_drive.last_addressed = now
             logger.info(

@@ -110,6 +110,12 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
     HEALTH_MESSAGE_STATE = Path("/home/lisa/.openclaw/workspace/pulse/self/health-message-state.json")
     HEALTH_REMINDER_COOLDOWN_SECONDS = 2 * 60 * 60
     FOOD_REMINDER_COOLDOWN_SECONDS = HEALTH_REMINDER_COOLDOWN_SECONDS
+    HEALTH_DRIVE_KINDS = {
+        "health_food": "food",
+        "health_sleep": "sleep",
+        "health_vitamins": "night_vitamins",
+        "health_snapshot": "evening_snapshot",
+    }
     EMOTIONAL_LANDSCAPE = Path("/home/lisa/.openclaw/workspace/pulse/self/emotional-landscape.json")
     GOALS_SNAPSHOT = Path("/home/lisa/.openclaw/workspace/pulse/self/goals-snapshot.json")
     HYPOTHESES = Path("/home/lisa/.openclaw/workspace/pulse/self/hypotheses.json")
@@ -123,18 +129,31 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
     AUTONOMOUS_TASKS = Path("/home/lisa/.openclaw/workspace/tasks/autonomous-tasks.md")
     OBSERVATIONS = Path("/home/lisa/.openclaw/workspace/tasks/observations.md")
 
+    @classmethod
+    def _health_kind_for_drive(cls, drive_name: str) -> str | None:
+        if drive_name == "health":
+            return None
+        return cls.HEALTH_DRIVE_KINDS.get(drive_name)
+
+    @classmethod
+    def _is_health_drive(cls, drive_name: str) -> bool:
+        return drive_name == "health" or drive_name in cls.HEALTH_DRIVE_KINDS
+
     def suppress_trigger(self, decision, config) -> dict | None:
         if not decision.top_drive:
             return None
 
-        if decision.top_drive.name == "health":
-            block = self._build_health_block(record_food_reminder=False)
+        if self._is_health_drive(decision.top_drive.name):
+            block = self._build_health_block(
+                record_food_reminder=False,
+                only_kind=self._health_kind_for_drive(decision.top_drive.name),
+            )
             if block:
                 return None
             return {
                 "reason": "health preflight found no human-visible diary gaps",
                 "feedback": {
-                    "drives_addressed": ["health"],
+                    "drives_addressed": [decision.top_drive.name],
                     "outcome": "success",
                     "summary": "Health diary preflight clean; no agent wake needed",
                 },
@@ -240,8 +259,11 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         if not decision.top_drive:
             return base
 
-        if decision.top_drive.name == "health":
-            block = self._build_health_block(record_food_reminder=True)
+        if self._is_health_drive(decision.top_drive.name):
+            block = self._build_health_block(
+                record_food_reminder=True,
+                only_kind=self._health_kind_for_drive(decision.top_drive.name),
+            )
             if not block:
                 return base
             return f"{base}\n\nHEALTH DAILY CHECK\n{block}"
@@ -355,7 +377,12 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         if record:
             self._record_health_reminder(kind, key, now_ts=now_ts)
 
-    def _build_health_block(self, *, record_food_reminder: bool = False) -> str:
+    def _build_health_block(
+        self,
+        *,
+        record_food_reminder: bool = False,
+        only_kind: str | None = None,
+    ) -> str:
         if not self.CHECK_SCRIPT.exists():
             return ""
         try:
@@ -429,14 +456,20 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         if not food_context_grace_active and after(15) and isinstance(meals, int) and meals < 2:
             food_lines.append(f"- Нормальных приёмов пищи пока: {meals}")
 
-        if food_lines:
+        if food_lines and only_kind in {None, "food"}:
             food_key = self._food_reminder_key(data)
             if self._health_reminder_allowed("food", food_key, now_ts=now_ts):
                 lines.extend(food_lines)
+                lines.extend([
+                    "- Это повод поговорить, а не утверждение о реальности: не завершай вызванный Pulse ход молча.",
+                    "- Полноценный приём для этой проверки = явно записанный основной животный белок (мясо, рыба, птица, яйца и т.п.) не в следовом количестве. Кефир/йогурт рядом с мюсли таким белком не считать; мюсли при этом остаются едой и завтраком.",
+                    "- Разбери расхождение вместе с Лисой: поправь дневник, после её явного согласия поправь классификатор либо прими, что еда/обед будет позже.",
+                    "- Если Лиса явно говорит, что еда будет позже, выполни `skills/health-diary/scripts/defer-food-pressure.py --hours 2`: он один раз снизит именно `health_food` и не даст ему расти ровно два часа. Отдельно будить Лису в момент окончания паузы не нужно.",
+                ])
                 if record_food_reminder:
                     self._record_health_reminder("food", food_key, now_ts=now_ts)
 
-        if after(16) and data.get("sleep_logged") is False:
+        if only_kind in {None, "sleep"} and after(16) and data.get("sleep_logged") is False:
             self._maybe_add_health_line(
                 lines,
                 kind="sleep",
@@ -450,7 +483,7 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
                 record=record_food_reminder,
             )
         missing_vitamins = data.get("night_vitamins_missing") or []
-        if after(23) and missing_vitamins:
+        if only_kind in {None, "night_vitamins"} and after(23) and missing_vitamins:
             self._maybe_add_health_line(
                 lines,
                 kind="night_vitamins",
@@ -463,7 +496,7 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
                 now_ts=now_ts,
                 record=record_food_reminder,
             )
-        if after(23, 30) and not data.get("evening_snapshot_complete", True):
+        if only_kind in {None, "evening_snapshot"} and after(23, 30) and not data.get("evening_snapshot_complete", True):
             self._maybe_add_health_line(
                 lines,
                 kind="evening_snapshot",
@@ -481,7 +514,7 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
             # Early-morning empty daily files are normal for Lisa's rhythm.
             # If a fresh daily note exists before the day has really started,
             # do not turn its empty template fields into a health nudge.
-            if after(10):
+            if only_kind is None and after(10):
                 missing_human = data.get("missing_human") or []
                 lines.extend(f"- {item}" for item in missing_human[:3])
 
