@@ -6,7 +6,11 @@ from datetime import datetime
 from pathlib import Path
 
 from pulse.src.conversation_lifecycle import growth_callback_kind
-from pulse.src.integrations.sayr.git_pulse import analyze_git_drive
+from pulse.src.integrations.sayr.git_pulse import (
+    GitMaintenanceResult,
+    analyze_git_drive,
+    execute_git_maintenance,
+)
 
 
 def _run_emotions_update() -> None:
@@ -164,14 +168,30 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
                 "feedback": feedback,
             }
 
-        git_action = analyze_git_drive(decision)
-        if git_action and git_action.kind == "clean":
+        try:
+            git_result = execute_git_maintenance(decision)
+        except Exception as exc:
+            git_context = decision.top_drive.source_data.get("git") or {}
+            git_result = GitMaintenanceResult(
+                outcome="failed",
+                repo_name=git_context.get("repo_name"),
+                repo_path=git_context.get("repo_path"),
+                resolves_drive=False,
+                before_head=None,
+                commit_hash=None,
+                committed_files=[],
+                remaining_files=[],
+                summary=f"Deterministic Git executor failed closed: {type(exc).__name__}",
+            )
+        if git_result:
+            decision.top_drive.source_data["git_maintenance_result"] = git_result.as_dict()
+        if git_result and git_result.resolves_drive and git_result.outcome == "no_action":
             return {
                 "reason": "git preflight: clean repo",
                 "feedback": {
                     "drives_addressed": [decision.top_drive.name],
                     "outcome": "success",
-                    "summary": git_action.headline,
+                    "summary": git_result.summary,
                     "decay_overrides": {
                         decision.top_drive.name: float(getattr(decision.top_drive, "pressure", 0.0) or 0.0)
                     },
@@ -196,6 +216,18 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         return "\n".join(parts)
 
     def build_trigger_message(self, decision, config) -> str:
+        if decision.top_drive and decision.top_drive.name.endswith("_git"):
+            result_data = decision.top_drive.source_data.get("git_maintenance_result")
+            if isinstance(result_data, dict):
+                result = GitMaintenanceResult.from_dict(result_data)
+                return "\n".join([
+                    f"{config.openclaw.message_prefix} Deterministic Git maintenance has already finished.",
+                    "Tell Lisa this result in one concise visible message.",
+                    "Do not run tools, modify Git, or spawn a subagent.",
+                    "",
+                    result.as_message(),
+                ])
+
         if decision.top_drive and decision.top_drive.name == "emotions":
             block = self._build_emotions_block()
             if block:

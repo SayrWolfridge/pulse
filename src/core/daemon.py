@@ -555,14 +555,14 @@ class PulseDaemon:
         # Fire webhook
         success = await self.webhook.trigger(message)
 
+        self._apply_trigger_drive_outcome(decision, delivery_success=success)
+
         if success:
-            self.drives.on_trigger_success(decision)
             self.state.log_trigger(decision, success=True)
             self.bus.emit(
                 TRIGGER_SUCCESS, decision=decision, success=True, turn=self.turn_count
             )
         else:
-            self.drives.on_trigger_failure(decision)
             self.state.log_trigger(decision, success=False)
             self.bus.emit(
                 TRIGGER_FAILURE, decision=decision, success=False, turn=self.turn_count
@@ -583,6 +583,34 @@ class PulseDaemon:
         # Feed outcome back to model evaluator for history context
         if self._model_evaluator and hasattr(self.evaluator, "record_trigger"):
             self.evaluator.record_trigger(decision, success)
+
+    def _apply_trigger_drive_outcome(self, decision, *, delivery_success: bool) -> None:
+        """Apply pressure feedback using the owner's terminal result.
+
+        Webhook delivery is the ordinary owner for non-Git turns. For Git turns,
+        the deterministic maintenance receipt is the owner: HTTP 202 alone must
+        never clear an unresolved repository drive.
+        """
+        git_result = None
+        if decision.top_drive and decision.top_drive.name.endswith("_git"):
+            candidate = decision.top_drive.source_data.get("git_maintenance_result")
+            if isinstance(candidate, dict):
+                git_result = candidate
+
+        # HTTP acceptance proves only result delivery. Git pressure is resolved
+        # exclusively by the deterministic executor's terminal receipt.
+        if git_result:
+            if git_result.get("resolves_drive"):
+                self.drives.on_trigger_success(decision)
+            else:
+                logger.info(
+                    "Git result delivered without drive decay: outcome=%s",
+                    git_result.get("outcome"),
+                )
+        elif delivery_success:
+            self.drives.on_trigger_success(decision)
+        else:
+            self.drives.on_trigger_failure(decision)
 
     def _handle_suppressed_trigger(self, decision, suppression: dict):
         """Resolve a trigger mechanically without waking the agent/model."""
