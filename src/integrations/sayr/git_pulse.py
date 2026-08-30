@@ -152,7 +152,19 @@ def analyze_git_drive(decision: Any) -> GitPulseAction | None:
             "Git drive has no valid repo_path", [], [],
             int(context.get("commits_ahead") or 0), int(context.get("commits_behind") or 0),
         )
-    dirty_files = _parse_porcelain(_git(str(repo_path), ["status", "--porcelain=v1"]))
+    repo_probe = _run_git(str(repo_path), ["rev-parse", "--is-inside-work-tree"])
+    status_probe = _run_git(str(repo_path), ["status", "--porcelain=v1"])
+    if (
+        repo_probe.returncode != 0
+        or repo_probe.stdout.strip() != "true"
+        or status_probe.returncode != 0
+    ):
+        return GitPulseAction(
+            "blocked", context.get("repo_name"), str(repo_path),
+            "Git preflight could not verify repository state", [], [],
+            int(context.get("commits_ahead") or 0), int(context.get("commits_behind") or 0),
+        )
+    dirty_files = _parse_porcelain(status_probe.stdout)
     ahead, behind = _ahead_behind(
         str(repo_path), int(context.get("commits_ahead") or 0),
         int(context.get("commits_behind") or 0),
@@ -313,6 +325,14 @@ def execute_git_maintenance(decision: Any, *, receipt_dir: Path | None = None) -
                       summary="git commit failed; Pulse rolled back its index entries")
 
     commit_hash = _git(str(repo_path), ["rev-parse", "HEAD"]).strip()
+    if not commit_hash or commit_hash == before_head:
+        return finish(
+            outcome="failed",
+            resolves_drive=False,
+            before_head=before_head,
+            remaining_files=[path for _, path in _status_entries(str(repo_path))],
+            summary="git commit returned without a verifiable new HEAD",
+        )
     remaining = [path for _, path in _status_entries(str(repo_path))]
     return finish(
         outcome="committed" if not remaining else "committed_partial",

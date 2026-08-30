@@ -63,6 +63,19 @@ def test_analyze_git_drive_returns_commit_needed_with_files(tmp_path):
     assert action.dirty_files == ["tracked.txt", "new.txt"]
 
 
+def test_executor_fails_closed_for_directory_that_is_not_a_git_repo(tmp_path):
+    repo = tmp_path / "not-a-repo"
+    repo.mkdir()
+
+    result = execute_git_maintenance(
+        _decision(str(repo)), receipt_dir=tmp_path / "receipts",
+    )
+
+    assert result is not None
+    assert result.outcome == "blocked"
+    assert result.resolves_drive is False
+
+
 def test_executor_commits_only_safe_workspace_additions(tmp_path):
     repo = _repo(tmp_path)
     (repo / "tracked.txt").write_text("keep uncommitted\n", encoding="utf-8")
