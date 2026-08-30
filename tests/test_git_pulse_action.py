@@ -113,6 +113,23 @@ def test_executor_commits_obsidian_markdown_and_resolves_clean_repo(tmp_path):
     assert _git(repo, "status", "--short").stdout == ""
 
 
+def test_executor_preserves_trailing_spaces_and_accepts_ordinary_large_markdown(tmp_path):
+    repo = _repo(tmp_path)
+    (repo / "memory").mkdir()
+    content = "Markdown hard break  \n" + ("x" * (600 * 1024)) + "\n"
+    note = repo / "memory" / "large.md"
+    note.write_text(content, encoding="utf-8")
+
+    result = execute_git_maintenance(
+        _decision(str(repo)), receipt_dir=tmp_path / "receipts",
+    )
+
+    assert result is not None
+    assert result.outcome == "committed"
+    assert result.committed_files == ["memory/large.md"]
+    assert _git(repo, "show", "HEAD:memory/large.md").stdout == content
+
+
 def test_executor_fails_closed_when_index_is_not_empty(tmp_path):
     repo = _repo(tmp_path)
     (repo / "memory").mkdir()

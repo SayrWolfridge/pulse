@@ -9,7 +9,10 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 
-MAX_NOTE_BYTES = 512 * 1024
+# The executor never sends note contents to a model. Ordinary large Markdown
+# therefore remains safe to commit; this ceiling is only a repository-bloat
+# guard, not a prompt/output limit.
+MAX_NOTE_BYTES = 25 * 1024 * 1024
 DEFAULT_RECEIPT_DIR = Path("~/.pulse/state/git-maintenance").expanduser()
 
 
@@ -211,12 +214,18 @@ def _is_safe_addition(repo_name: str | None, repo_path: Path, relative_path: str
     full_path = repo_path.joinpath(*posix.parts)
     try:
         stat = full_path.lstat()
-        return (
-            not full_path.is_symlink()
-            and full_path.is_file()
-            and 0 < stat.st_size <= MAX_NOTE_BYTES
-            and b"\0" not in full_path.read_bytes()[:8192]
-        )
+        if (
+            full_path.is_symlink()
+            or not full_path.is_file()
+            or stat.st_size <= 0
+            or stat.st_size > MAX_NOTE_BYTES
+        ):
+            return False
+        # Read only the binary probe, never the full note. Trailing whitespace
+        # is intentionally preserved: in Markdown two trailing spaces can be
+        # meaningful and must not create a question or a silent rewrite.
+        with full_path.open("rb") as stream:
+            return b"\0" not in stream.read(8192)
     except OSError:
         return False
 
