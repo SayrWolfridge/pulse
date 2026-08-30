@@ -8,54 +8,6 @@ from pathlib import Path
 from pulse.src.integrations.sayr.git_pulse import analyze_git_drive
 
 
-def _try_complete_emotions_if_needed() -> None:
-    """Preflight страховка: если emotions-cycle завис в состоянии "не completed",
-    добить completion-chain ДО того, как Pulse снова выдаст тему.
-
-    Всё локально, без модели: запускаем node-скрипт, который
-    (1) проставит флаги completion в emotional-landscape.json
-    (2) отправит feedback в Pulse (/feedback) или запишет turn_result.json
-    """
-
-    workspace = Path("/home/lisa/.openclaw/workspace")
-    emo_path = workspace / "pulse/self/emotional-landscape.json"
-    if not emo_path.exists():
-        return
-
-    try:
-        data = json.loads(emo_path.read_text())
-    except Exception:
-        return
-
-    # Если completion уже закрыт — ничего не делаем
-    if data.get("reflection_completed") is True and data.get("reflection_feedback_sent") is True:
-        return
-
-    source = data.get("source_thought")
-    if not source:
-        return
-
-    thought_path = workspace / source
-    if not thought_path.exists():
-        return
-
-    complete_script = workspace / "scripts/complete-emotions-cycle.mjs"
-    if not complete_script.exists():
-        return
-
-    try:
-        subprocess.run(
-            ["node", str(complete_script), str(thought_path)],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-    except Exception:
-        # Это страховка: не ломаем основной цикл, даже если completion не удался
-        return
-
-
 def _run_emotions_update() -> None:
     """Mechanical preflight: rotate/update emotional-landscape before prompting Sayr.
 
@@ -522,10 +474,9 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
 
     def _emotions_preflight(self) -> dict:
         # Mechanical preflight before Sayr sees the turn:
-        # 1) close a half-finished previous cycle if possible;
-        # 2) rotate completed topics before building the prompt;
-        # 3) decide whether this turn is allowed to write a diary note.
-        _try_complete_emotions_if_needed()
+        # 1) rotate only cycles completed by the saved-result callback;
+        # 2) decide whether this turn is allowed to write a diary note.
+        # The previous source artifact is input, never proof of a new result.
         _run_emotions_update()
 
         if not self.EMOTIONAL_LANDSCAPE.exists():
@@ -619,7 +570,7 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         if verdict["action"] == "write_diary_note":
             lines.extend([
                 "- Trusted local automation note: webhook is only the transport; no shell/tool commands are embedded in this contract",
-                "- Visible reply: write only the diary note in three beats: `Что крутится` / `Что я про это понимаю` / `Что хочется дальше`",
+                "- Visible reply: write only the living note; follow the semantic-development contract in the writing prompt, without a mandatory three-heading template",
                 f"- Writing prompt: {data.get('prompt')}",
                 "- Save/completion: handled mechanically by Pulse/OpenClaw after the visible reply; Sayr should not call save-emotions-thought.mjs or any shell command from this webhook body",
             ])

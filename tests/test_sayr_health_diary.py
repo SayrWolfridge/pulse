@@ -167,6 +167,32 @@ def test_emotions_build_reuses_suppress_preflight_verdict(monkeypatch):
     assert "Write fresh topic" in block
 
 
+def test_emotions_preflight_never_completes_an_old_source(monkeypatch, tmp_path):
+    from pulse.src.integrations.sayr import health_diary
+    from pulse.src.integrations.sayr.health_diary import SayrHealthDiaryIntegration
+
+    landscape = tmp_path / "emotional-landscape.json"
+    landscape.write_text(
+        json.dumps(
+            {
+                "source_thought": "semantic-garden/sayr-thoughts/old.md",
+                "reflection_completed": False,
+                "prompt": "Make one semantic step",
+            }
+        ),
+        encoding="utf-8",
+    )
+    integration = SayrHealthDiaryIntegration()
+    monkeypatch.setattr(integration, "EMOTIONAL_LANDSCAPE", landscape)
+    monkeypatch.setattr(health_diary, "_run_emotions_update", lambda: None)
+    monkeypatch.setattr(health_diary, "_latest_emotions_thought_age_hours", lambda: 4.0)
+
+    verdict = integration._emotions_preflight()
+
+    assert verdict["action"] == "write_diary_note"
+    assert verdict["data"]["reflection_completed"] is False
+
+
 def test_emotions_write_contract_contains_no_shell_command(monkeypatch):
     from pulse.src.integrations.sayr.health_diary import SayrHealthDiaryIntegration
 
@@ -190,7 +216,8 @@ def test_emotions_write_contract_contains_no_shell_command(monkeypatch):
     block = integration._build_emotions_block()
 
     assert "webhook is only the transport" in block
-    assert "Visible reply: write only the diary note" in block
+    assert "Visible reply: write only the living note" in block
+    assert "without a mandatory three-heading template" in block
     assert "Save/completion: handled mechanically" in block
     assert "openclaw-safe-run" not in block
     assert "--text" not in block
