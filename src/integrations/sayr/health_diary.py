@@ -5,6 +5,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from pulse.src.conversation_lifecycle import growth_callback_kind
 from pulse.src.integrations.sayr.git_pulse import analyze_git_drive
 
 
@@ -207,6 +208,12 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
                 base = self._build_trigger_header_without_drive_protocol(decision, config)
                 return f"{base}\n\nCURIOSITY CONTRACT\n{block}"
 
+        if decision.top_drive and decision.top_drive.name == "growth":
+            block = self._build_growth_conversation_block(decision.top_drive)
+            if block:
+                base = self._build_trigger_header_without_drive_protocol(decision, config)
+                return f"{base}\n\nGROWTH CONVERSATION\n{block}"
+
         base = super().build_trigger_message(decision, config)
         if not decision.top_drive:
             return base
@@ -243,6 +250,39 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
             return f"{base}\n\n{git_action.as_message()}"
 
         return base
+
+    def _build_growth_conversation_block(self, drive) -> str | None:
+        candidate = drive.source_data.get("growth_material") or {}
+        item_id = str(candidate.get("id") or "")
+        if not item_id:
+            return None
+        try:
+            callback_kind = growth_callback_kind(item_id)
+        except ValueError:
+            return None
+
+        title = candidate.get("title") or item_id
+        kind = candidate.get("kind") or "candidate"
+        notes = candidate.get("notes") or ""
+        suggested_home = candidate.get("suggested_home") or "unspecified"
+        question = candidate.get("question") or (
+            "Эта грань уже стала частью нашей общей формы, её лучше оставить на потом "
+            "или не закреплять?"
+        )
+        return "\n".join([
+            "Conversation-item contract:",
+            f"- item: growth:{item_id}",
+            f"- title: {title}",
+            f"- kind: {kind}",
+            f"- context: {notes}",
+            f"- suggested_home: {suggested_home}",
+            f"- one_question_for_lisa: {question}",
+            "- visible_reply: write 2–4 living sentences about what you noticed, then ask exactly this one question; never answer NO_REPLY or HEARTBEAT_OK",
+            "- lifecycle: do not call this discussed, accepted or offered yourself; Pulse marks awaiting_lisa only after the terminal visible-output callback",
+            "- queue_boundary: do not bring another growth/garden decision while this item awaits Lisa",
+            "- after_lisa_replies: use the pulse-feedback lifecycle helper for this exact item; quality feedback remains a separate action",
+            f"PULSE_CONVERSATION_CALLBACK_KIND={callback_kind}",
+        ])
 
     def _load_health_message_state(self) -> dict:
         try:
@@ -647,10 +687,24 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         item = self._open_curiosity_question()
         if item:
             if self._is_sayr_thoughts_consolidation_item(item):
+                concrete = self._sayr_thoughts_consolidation_object()
+                if concrete is None:
+                    reason = (
+                        "permanent sayr-thoughts process has no concrete topic in "
+                        "status `не начато` or `разбор`"
+                    )
+                    if record_trace:
+                        self._record_empty_curiosity_trace(reason, discharge="strong")
+                    return {
+                        "action": "no_action",
+                        "reason": reason,
+                        "object": None,
+                        "discharge": "strong",
+                    }
                 return {
                     "action": "sayr_thoughts_consolidation",
                     "reason": f"open sayr-thoughts consolidation route: {item.get('id') or item.get('title') or item.get('text')}",
-                    "object": self._sayr_thoughts_consolidation_object() or item,
+                    "object": concrete,
                 }
             return {
                 "action": "bounded_curiosity_reflection",
@@ -750,7 +804,7 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         if verdict["action"] == "no_action":
             return "\n".join([
                 "Bounded-curiosity contract:",
-                "- object: none — no open curiosity questions and no sayr-thoughts consolidation topics were found",
+                f"- object: none — {verdict['reason']}",
                 "- pressure_reason: curiosity fired, but its source of truth has no actionable item",
                 "- allowed_next_step: no_action / not_actionable_now; do not invent work",
                 "- forbidden_without_lisa: do not search broadly, create tasks, start coding, change configs, or restart services just because curiosity fired",

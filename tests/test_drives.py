@@ -927,7 +927,7 @@ class TestGrowthDrive:
 
         assert engine.drives["growth"].pressure == 0.0
 
-    def test_prompted_growth_material_is_suppressed_until_tomorrow_14(self, tmp_path):
+    def test_growth_http_acceptance_marks_dispatch_pending_without_offering(self, tmp_path):
         engine = self._make_engine()
         material_path = tmp_path / "growth-material.json"
         material_path.write_text(
@@ -936,7 +936,7 @@ class TestGrowthDrive:
         )
         engine.GROWTH_MATERIAL_PATH = material_path
 
-        changed = engine._suppress_prompted_growth_material(
+        changed = engine._mark_growth_dispatch_pending(
             "g1",
             now_dt=datetime(2026, 5, 27, 15, 48, 30),
         )
@@ -944,10 +944,12 @@ class TestGrowthDrive:
         data = __import__("json").loads(material_path.read_text(encoding="utf-8"))
         item = data["items"][0]
         assert changed is True
-        assert item["last_prompted_at"] == "2026-05-27T15:48:30"
-        assert item["suppress_until"] == "2026-05-28T14:00:00"
+        assert item["status"] == "candidate"
+        assert item["dispatch_accepted_at"].startswith("2026-05-27T15:48:30")
+        assert item["dispatch_pending_until"].startswith("2026-05-27T17:48:30")
+        assert "offered_at" not in item
 
-    def test_growth_success_suppresses_candidate(self, tmp_path):
+    def test_growth_http_success_does_not_claim_visible_offer(self, tmp_path):
         from unittest.mock import MagicMock
 
         engine = self._make_engine()
@@ -968,8 +970,27 @@ class TestGrowthDrive:
 
         data = __import__("json").loads(material_path.read_text(encoding="utf-8"))
         item = data["items"][0]
-        assert item["suppress_until"].endswith("T14:00:00")
+        assert item["status"] == "candidate"
+        assert item["dispatch_pending_until"]
+        assert "offered_at" not in item
         assert engine.drives["growth"].pressure == 0.0
+
+    def test_awaiting_lisa_growth_item_blocks_next_candidate(self, tmp_path):
+        engine = self._make_engine()
+        material_path = tmp_path / "growth-material.json"
+        material_path.write_text(
+            '{"items":['
+            '{"id":"g1","status":"awaiting_lisa","title":"first"},'
+            '{"id":"g2","status":"candidate","title":"second"}'
+            ']}',
+            encoding="utf-8",
+        )
+        engine.GROWTH_MATERIAL_PATH = material_path
+
+        engine._refresh_growth_material(now_dt=datetime(2026, 5, 27, 15, 0))
+
+        assert engine.drives["growth"].pressure == 0.0
+        assert "growth_material" not in engine.drives["growth"].source_data
 
     def test_health_trigger_success_discharges_extra_pressure_before_user_reply(self):
         from unittest.mock import MagicMock

@@ -12,6 +12,7 @@ while the main session stays clean for human conversation.
 
 import json
 import logging
+import re
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -155,6 +156,12 @@ class OpenClawWebhook:
     def _result_callback_kind(self, message: str) -> str | None:
         if "EMOTIONAL LANDSCAPE" in message and "- Mode: write_diary_note" in message:
             return "pulse.emotions.write_diary_note"
+        conversation = re.search(
+            r"(?m)^PULSE_CONVERSATION_CALLBACK_KIND=(pulse\.conversation\.growth:[A-Za-z0-9._-]{1,128})$",
+            message,
+        )
+        if conversation:
+            return conversation.group(1)
         return None
 
     async def wake(self, text: str) -> bool:

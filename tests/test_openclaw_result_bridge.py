@@ -82,6 +82,42 @@ async def test_openclaw_turn_result_rejects_bad_token():
     assert response.status == 401
 
 
+@pytest.mark.asyncio
+async def test_openclaw_turn_result_marks_growth_item_awaiting_lisa(monkeypatch, tmp_path):
+    from pulse.src.core.health import HealthServer
+
+    material_path = tmp_path / "growth-material.json"
+    material_path.write_text(
+        '{"items":[{"id":"g1","status":"candidate","title":"one question"}]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("pulse.src.core.health.GROWTH_MATERIAL_PATH", material_path)
+    daemon = SimpleNamespace(
+        config=SimpleNamespace(openclaw=SimpleNamespace(webhook_token="secret")),
+        start_time=0,
+        mutator=SimpleNamespace(get_state=lambda: {}),
+    )
+    server = HealthServer(daemon, port=9796)
+
+    response = await server._handle_openclaw_turn_result(
+        FakeRequest(
+            {
+                "kind": "pulse.conversation.growth:g1",
+                "runId": "run-growth-1",
+                "status": "ok",
+                "outputText": "Я написал Лисе и задал один вопрос.",
+            }
+        )
+    )
+
+    payload = json.loads(response.text)
+    item = json.loads(material_path.read_text(encoding="utf-8"))["items"][0]
+    assert response.status == 200
+    assert payload["conversation"]["status"] == "awaiting_lisa"
+    assert item["status"] == "awaiting_lisa"
+    assert item["offered_run_id"] == "run-growth-1"
+
+
 def test_openclaw_webhook_adds_result_callback_for_emotions(monkeypatch):
     from pulse.src.core.config import PulseConfig
     from pulse.src.core.webhook import OpenClawWebhook
@@ -92,4 +128,7 @@ def test_openclaw_webhook_adds_result_callback_for_emotions(monkeypatch):
     hook = OpenClawWebhook(cfg)
 
     assert hook._result_callback_kind("EMOTIONAL LANDSCAPE\n- Mode: write_diary_note") == "pulse.emotions.write_diary_note"
+    assert hook._result_callback_kind(
+        "GROWTH CONVERSATION\nPULSE_CONVERSATION_CALLBACK_KIND=pulse.conversation.growth:g1"
+    ) == "pulse.conversation.growth:g1"
     assert hook._result_callback_kind("HEALTH DAILY CHECK") is None

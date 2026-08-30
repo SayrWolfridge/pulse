@@ -821,7 +821,7 @@ def test_curiosity_open_question_adds_bounded_contract(monkeypatch, tmp_path):
     assert "relationship/system rhythm" in block
 
 
-def test_curiosity_skips_deferred_question_and_uses_next_open_question(monkeypatch, tmp_path):
+def test_curiosity_skips_deferred_question_and_suppresses_empty_permanent_route(monkeypatch, tmp_path):
     integration = _patch_curiosity_paths(
         monkeypatch,
         tmp_path,
@@ -842,18 +842,17 @@ def test_curiosity_skips_deferred_question_and_uses_next_open_question(monkeypat
     )
 
     verdict = integration._curiosity_preflight(record_trace=True)
-    assert verdict["action"] == "sayr_thoughts_consolidation"
-    assert verdict["object"]["id"] == "c3"
+    assert verdict["action"] == "no_action"
+    assert verdict["object"] is None
+    assert "no concrete topic" in verdict["reason"]
 
     block = integration._build_curiosity_block()
-    assert "Sayr-thoughts consolidation contract" in block
-    assert "curiosity question `c3`" not in block
-    assert "complete-curiosity-question.mjs --id c3 --status resolved" not in block
-    assert "do not mark this permanent process resolved" in block
+    assert "object: none" in block
+    assert "no concrete topic" in block
     assert "curiosity question `c2`" not in block
 
 
-def test_curiosity_garden_table_mode_uses_consolidation_contract(monkeypatch, tmp_path):
+def test_curiosity_garden_table_mode_needs_one_concrete_index_topic(monkeypatch, tmp_path):
     integration = _patch_curiosity_paths(
         monkeypatch,
         tmp_path,
@@ -870,18 +869,15 @@ def test_curiosity_garden_table_mode_uses_consolidation_contract(monkeypatch, tm
     )
 
     verdict = integration._curiosity_preflight(record_trace=True)
-    assert verdict["action"] == "sayr_thoughts_consolidation"
-    assert verdict["object"]["id"] == "c3"
+    assert verdict["action"] == "no_action"
+    assert verdict["object"] is None
 
     block = integration._build_curiosity_block()
-    assert "Sayr-thoughts consolidation contract" in block
-    assert "one bounded garden-table action" in block
-    assert "Что заметил" not in block
-    assert "bounded reflection" not in block
-    assert "complete-curiosity-question.mjs --id c3 --status resolved" not in block
+    assert "object: none" in block
+    assert "no concrete topic" in block
 
 
-def test_curiosity_trigger_message_omits_generic_drive_protocol_for_consolidation(monkeypatch, tmp_path):
+def test_empty_permanent_curiosity_route_is_suppressed_before_wake(monkeypatch, tmp_path):
     integration = _patch_curiosity_paths(
         monkeypatch,
         tmp_path,
@@ -900,16 +896,11 @@ def test_curiosity_trigger_message_omits_generic_drive_protocol_for_consolidatio
         top_drive_pressure_snapshot=0.70,
         total_pressure=0.70,
     )
-    config = SimpleNamespace(openclaw=SimpleNamespace(message_prefix="[PULSE]"))
+    suppression = integration.suppress_trigger(decision, config=None)
 
-    message = integration.build_trigger_message(decision, config)
-
-    assert "CURIOSITY CONTRACT" in message
-    assert "Sayr-thoughts consolidation contract" in message
-    assert "Drive-specific protocol:" not in message
-    assert "### 3. `drive = curiosity`" not in message
-    assert "Что заметил" not in message
-    assert "complete-curiosity-question.mjs --id c3 --status resolved" not in message
+    assert suppression is not None
+    assert suppression["feedback"]["drives_addressed"] == ["curiosity"]
+    assert "no concrete topic" in suppression["feedback"]["summary"]
 
 
 def test_curiosity_skips_resolved_questions(monkeypatch, tmp_path):
@@ -962,6 +953,41 @@ def test_curiosity_routes_to_permanent_sayr_thoughts_consolidation(monkeypatch, 
     assert "Здоровье как забота" in block
     assert "do not mark this permanent process resolved" in block
     assert not integration.CURIOSITY_NO_ACTION_TRACE.exists()
+
+
+def test_growth_message_contains_one_question_and_terminal_callback_marker():
+    from pulse.src.integrations.sayr.health_diary import SayrHealthDiaryIntegration
+
+    integration = SayrHealthDiaryIntegration()
+    growth = SimpleNamespace(
+        name="growth",
+        pressure=0.8,
+        source_data={
+            "growth_material": {
+                "id": "g1",
+                "title": "Ясность — честность",
+                "kind": "stable_formula",
+                "notes": "говорить прямо и бережно",
+                "suggested_home": "MEMORY.md",
+            }
+        },
+    )
+    decision = SimpleNamespace(
+        reason="combined_threshold",
+        top_drive=growth,
+        top_drive_pressure_snapshot=0.8,
+        total_pressure=0.8,
+    )
+    config = SimpleNamespace(openclaw=SimpleNamespace(message_prefix="[PULSE]"))
+
+    message = integration.build_trigger_message(decision, config)
+
+    assert "GROWTH CONVERSATION" in message
+    assert "item: growth:g1" in message
+    assert "one_question_for_lisa" in message
+    assert "never answer NO_REPLY" in message
+    assert "PULSE_CONVERSATION_CALLBACK_KIND=pulse.conversation.growth:g1" in message
+    assert "Drive-specific protocol:" not in message
 
 
 def test_curiosity_no_open_questions_suppresses_and_discharges(monkeypatch, tmp_path):

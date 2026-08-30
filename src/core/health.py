@@ -15,6 +15,10 @@ import time
 from pathlib import Path
 from aiohttp import web
 from pulse.src import __version__
+from pulse.src.conversation_lifecycle import (
+    growth_id_from_callback_kind,
+    mark_growth_terminal_result,
+)
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -23,6 +27,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger("pulse.health")
 
 DEFAULT_PORT = 9720
+GROWTH_MATERIAL_PATH = Path(
+    "/home/lisa/.openclaw/workspace/pulse/self/growth-material.json"
+)
 
 
 class HealthServer:
@@ -194,6 +201,37 @@ class HealthServer:
         kind = data.get("kind")
         status = data.get("status")
         run_id = data.get("runId")
+        growth_item_id = growth_id_from_callback_kind(kind)
+        if growth_item_id:
+            text = data.get("outputText") or data.get("summary") or ""
+            if not isinstance(text, str):
+                text = ""
+            try:
+                result = mark_growth_terminal_result(
+                    GROWTH_MATERIAL_PATH,
+                    growth_item_id,
+                    status=str(status or "unknown"),
+                    run_id=run_id,
+                    output_text=text,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "OpenClaw growth conversation result failed: id=%s runId=%s error=%s",
+                    growth_item_id,
+                    run_id,
+                    exc,
+                )
+                return web.json_response({"error": "growth lifecycle update failed"}, status=500)
+            if status == "ok" and result.get("reason") == "missing-visible-output":
+                return web.json_response({"error": "missing outputText"}, status=400)
+            logger.info(
+                "OpenClaw growth conversation result: id=%s runId=%s result=%s",
+                growth_item_id,
+                run_id,
+                result.get("status") or result.get("reason"),
+            )
+            return web.json_response({"ok": True, "conversation": result})
+
         if kind != "pulse.emotions.write_diary_note":
             return web.json_response({"ok": True, "ignored": "unsupported kind"})
         if status != "ok":

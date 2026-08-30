@@ -22,6 +22,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from pulse.src import thalamus
+from pulse.src.conversation_lifecycle import (
+    mark_growth_dispatch_pending,
+    parse_iso as parse_conversation_iso,
+)
 from pulse.src.core.config import PulseConfig
 from pulse.src.state.persistence import StatePersistence
 
@@ -661,10 +665,30 @@ class DriveEngine:
 
     def _select_growth_candidate(self, data: dict, *, now_dt: datetime) -> Optional[dict]:
         items = data.get("items", []) if isinstance(data, dict) else []
+        if any(
+            isinstance(item, dict) and item.get("status") == "awaiting_lisa"
+            for item in items
+        ):
+            return None
         for item in items:
             if not isinstance(item, dict):
                 continue
-            if item.get("status") != "candidate":
+            status = item.get("status")
+            if status not in {"candidate", "later"}:
+                continue
+            if status == "later":
+                revisit_after = parse_conversation_iso(item.get("revisit_after"))
+                if revisit_after is None or revisit_after > now_dt:
+                    continue
+            dispatch_pending_until = parse_conversation_iso(
+                item.get("dispatch_pending_until")
+            )
+            if dispatch_pending_until and dispatch_pending_until > now_dt:
+                continue
+            delivery_retry_after = parse_conversation_iso(
+                item.get("delivery_retry_after")
+            )
+            if delivery_retry_after and delivery_retry_after > now_dt:
                 continue
             suppress_until = self._parse_iso_timestamp(item.get("suppress_until"))
             if suppress_until and suppress_until > now_dt:
@@ -702,30 +726,21 @@ class DriveEngine:
         drive.source_data["growth_material"] = candidate
         drive.source_data["message"] = self._growth_candidate_summary(candidate)
 
-    def _suppress_prompted_growth_material(self, candidate_id: str, *, now_dt: datetime | None = None) -> bool:
-        """Mark a shown growth candidate quiet until tomorrow 14:00 local time."""
+    def _mark_growth_dispatch_pending(self, candidate_id: str, *, now_dt: datetime | None = None) -> bool:
+        """Record webhook admission without claiming Sayr wrote visibly."""
         now_dt = now_dt or datetime.now()
         try:
-            data = json.loads(self.GROWTH_MATERIAL_PATH.read_text(encoding="utf-8"))
+            result = mark_growth_dispatch_pending(
+                self.GROWTH_MATERIAL_PATH,
+                candidate_id,
+                now=now_dt.astimezone(),
+            )
         except Exception:
             return False
-        items = data.get("items", []) if isinstance(data, dict) else []
-        changed = False
-        for item in items:
-            if not isinstance(item, dict) or item.get("id") != candidate_id:
-                continue
-            item["last_prompted_at"] = now_dt.isoformat(timespec="seconds")
-            item["suppress_until"] = self._next_day_14(now_dt).isoformat(timespec="seconds")
-            changed = True
-            break
-        if not changed:
-            return False
-        self.GROWTH_MATERIAL_PATH.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        self._source_cache.pop(str(self.GROWTH_MATERIAL_PATH), None)
-        return True
+        if result.get("changed"):
+            self._source_cache.pop(str(self.GROWTH_MATERIAL_PATH), None)
+            return True
+        return False
 
     def _refresh_evening_culture_drive(self, *, dt: float, now_dt: datetime | None = None):
         """Grow a soft evening culture-talk drive from 16:30 until midnight.
@@ -1557,7 +1572,7 @@ class DriveEngine:
                 candidate = top_drive.source_data.get("growth_material") or {}
                 candidate_id = candidate.get("id")
                 if candidate_id:
-                    self._suppress_prompted_growth_material(candidate_id)
+                    self._mark_growth_dispatch_pending(candidate_id)
                     top_drive.pressure = 0.0
             if top_drive.name == self.EVENING_CULTURE_DRIVE:
                 prompted = self._mark_evening_culture_prompted(now_dt=datetime.fromtimestamp(now))
