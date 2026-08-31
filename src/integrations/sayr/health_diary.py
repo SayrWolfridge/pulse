@@ -246,6 +246,16 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
                 base = self._build_trigger_header_without_drive_protocol(decision, config)
                 return f"{base}\n\nGROWTH CONVERSATION\n{block}"
 
+        if decision.top_drive and decision.top_drive.name in self.HEALTH_DRIVE_KINDS:
+            base = self._build_trigger_header_without_drive_protocol(decision, config)
+            block = self._build_health_block(
+                record_food_reminder=True,
+                only_kind=self._health_kind_for_drive(decision.top_drive.name),
+            )
+            if not block:
+                return base
+            return f"{base}\n\nHEALTH DAILY CHECK\n{block}"
+
         base = super().build_trigger_message(decision, config)
         if not decision.top_drive:
             return base

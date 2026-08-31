@@ -137,6 +137,63 @@ def test_health_food_drive_builds_only_food_and_requires_dialogue(monkeypatch, t
     assert "Запись про сон" not in block
 
 
+def test_health_food_prompt_uses_owned_protocol_without_missing_banner(monkeypatch, tmp_path):
+    from pulse.src.core.config import PulseConfig
+    from pulse.src.drives.engine import Drive
+    from pulse.src.evaluator.priority import TriggerDecision
+
+    data = {
+        "has_real_food_today": True,
+        "food_grace_active": False,
+        "meal_grace_active": False,
+        "meals_substantial": 1,
+        "sleep_logged": False,
+    }
+    integration = _patch_health_check(monkeypatch, tmp_path, data)
+    drive = Drive(name="health_food", category="health", pressure=0.7, weight=0.7)
+
+    message = integration.build_trigger_message(
+        TriggerDecision(
+            should_trigger=True,
+            reason="single_drive_threshold: health_food",
+            total_pressure=0.7,
+            top_drive=drive,
+        ),
+        PulseConfig(),
+    )
+
+    assert "Top drive: health_food" in message
+    assert "HEALTH DAILY CHECK" in message
+    assert "не завершай вызванный Pulse ход молча" in message
+    assert "defer-food-pressure.py --hours 2" in message
+    assert "Drive-specific protocol missing" not in message
+    assert "Запись про сон" not in message
+
+
+def test_unknown_drive_still_fails_closed_when_protocol_is_missing(monkeypatch, tmp_path):
+    from pulse.src.core.config import PulseConfig
+    from pulse.src.drives.engine import Drive
+    from pulse.src.evaluator.priority import TriggerDecision
+    from pulse.src.integrations.default import DefaultIntegration
+
+    monkeypatch.setattr(
+        "pulse.src.integrations.default.CORTEX_PULSE_PATH",
+        tmp_path / "missing-cortex.md",
+    )
+    drive = Drive(name="unknown_drive", category="unknown", pressure=1.0, weight=1.0)
+    message = DefaultIntegration().build_trigger_message(
+        TriggerDecision(
+            should_trigger=True,
+            reason="single_drive_threshold: unknown_drive",
+            total_pressure=1.0,
+            top_drive=drive,
+        ),
+        PulseConfig(),
+    )
+
+    assert "Drive-specific protocol missing for unknown_drive" in message
+
+
 def test_emotions_build_reuses_suppress_preflight_verdict(monkeypatch):
     from pulse.src.integrations.sayr.health_diary import SayrHealthDiaryIntegration
 
