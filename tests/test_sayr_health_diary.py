@@ -211,6 +211,44 @@ def test_iron_gap_prompt_has_separate_once_per_day_state(monkeypatch, tmp_path):
     assert "Отдельный спокойный факт" not in reset
 
 
+def test_iron_clarification_asks_one_exact_question_and_stays_pending(monkeypatch, tmp_path):
+    clarification = {
+        "kind": "ambiguous_entry",
+        "date": "2026-04-28",
+        "text": "морепродукты",
+        "question": "2026-04-28: «морепродукты» — это были мидии/устрицы или креветки/рыба?",
+    }
+    data = {
+        "date": "2026-04-30",
+        "has_real_food_today": True,
+        "food_grace_active": True,
+        "meal_grace_active": False,
+        "meals_substantial": 1,
+        "sleep_logged": True,
+        "iron_rich_signal_ready": False,
+        "iron_rich_gap_days": None,
+        "iron_rich_clarification_needed": True,
+        "iron_rich_clarification": clarification,
+    }
+    integration = _patch_health_check(monkeypatch, tmp_path, data)
+
+    monkeypatch.setattr("pulse.src.integrations.sayr.health_diary.time.time", lambda: 1000.0)
+    first = integration._build_health_block(record_food_reminder=True, only_kind="food")
+    assert "окно пока unknown" in first
+    assert clarification["question"] in first
+    assert first.count("?") == 1
+    assert "штатным health-diary маршрутом" in first
+    assert "Если Лиса не помнит" in first
+    assert "не запускай для него defer-food-pressure.py" in first
+    saved = json.loads(integration.HEALTH_MESSAGE_STATE.read_text(encoding="utf-8"))
+    assert saved["iron_clarification"]["status"] == "awaiting_lisa"
+    assert saved["iron_clarification"]["pending"] == clarification
+
+    monkeypatch.setattr("pulse.src.integrations.sayr.health_diary.time.time", lambda: 1000.0 + 7200)
+    repeated = integration._build_health_block(record_food_reminder=True, only_kind="food")
+    assert clarification["question"] not in repeated
+
+
 def test_unknown_drive_still_fails_closed_when_protocol_is_missing(monkeypatch, tmp_path):
     from pulse.src.core.config import PulseConfig
     from pulse.src.drives.engine import Drive

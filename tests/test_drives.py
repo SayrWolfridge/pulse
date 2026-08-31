@@ -1190,6 +1190,62 @@ class TestHealthStateBridgeRefresh:
         engine._refresh_health_rules()
         assert health_food.pressure == pytest.approx(0.85)
 
+    def test_iron_clarification_rule_is_once_daily_and_independent_of_food_hold(self, tmp_path):
+        import json
+
+        engine = self._make_engine(tmp_path)
+        bridge_path = tmp_path / "scripts" / "health-diary-health-state-bridge.mjs"
+        bridge_path.parent.mkdir(parents=True)
+        bridge_path.write_text(
+            "import fs from 'fs';\n"
+            "fs.mkdirSync('pulse/self', { recursive: true });\n"
+            "fs.writeFileSync('pulse/self/health-state.json', JSON.stringify({ "
+            "iron_rich_clarification_needed: true }));\n",
+            encoding="utf-8",
+        )
+        rules_path = tmp_path / "skills" / "health-diary" / "config" / "pulse-health-rules.json"
+        rules_path.parent.mkdir(parents=True, exist_ok=True)
+        rules_path.write_text(
+            json.dumps({
+                "enabled": True,
+                "rules": [{
+                    "id": "iron_clarification",
+                    "once_per_day": True,
+                    "independent_of_food_context_hold": True,
+                    "conditions": [
+                        {"field": "iron_rich_rule_contract_v1", "op": "==", "value": True},
+                        {"field": "iron_rich_clarification_needed", "op": "==", "value": True},
+                    ],
+                    "effect": {
+                        "drive": "health_food",
+                        "pressure_delta": 0.25,
+                        "message": "iron clarification",
+                    },
+                }],
+            }),
+            encoding="utf-8",
+        )
+        context_path = tmp_path / "pulse" / "self" / "health-food-context.json"
+        context_path.parent.mkdir(parents=True, exist_ok=True)
+        context_path.write_text(
+            json.dumps({
+                "status": "deferred",
+                "accepted_at": "2026-08-31T08:00:00+03:00",
+                "hold_until": "2999-08-31T10:00:00+03:00",
+            }),
+            encoding="utf-8",
+        )
+        health_food = engine.drives["health_food"] = Drive(
+            name="health_food", category="health", pressure=1.0, weight=0.7
+        )
+
+        engine._refresh_health_rules()
+        assert health_food.pressure == pytest.approx(0.85)
+        assert health_food.source_data["rule_id"] == "iron_clarification"
+
+        engine._refresh_health_rules()
+        assert health_food.pressure == pytest.approx(0.85)
+
     def test_health_drives_are_source_driven_not_time_driven(self, tmp_path, monkeypatch):
         engine = self._make_engine(tmp_path)
         engine.config.drives.pressure_rate = 1.0

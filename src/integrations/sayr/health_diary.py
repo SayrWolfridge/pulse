@@ -362,7 +362,7 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
             return True
         if not isinstance(last_ts, (int, float)):
             return True
-        if kind == "iron_rich":
+        if kind in {"iron_rich", "iron_clarification"}:
             # The key contains the health-day date. A recorded reminder stays
             # closed for that entire day; the next date naturally creates a
             # new key. The immediate-food two-hour cadence does not apply.
@@ -407,6 +407,24 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
             "gap_days": data.get("iron_rich_gap_days"),
             "window_dates": data.get("iron_rich_window_dates") or [],
         }
+
+    def _iron_clarification_key(self, data: dict) -> dict:
+        return {
+            "kind": "iron_clarification",
+            "date": data.get("date"),
+            "clarification": data.get("iron_rich_clarification"),
+        }
+
+    def _record_iron_clarification(self, data: dict, *, now_ts: float) -> None:
+        key = self._iron_clarification_key(data)
+        state = self._load_health_message_state()
+        state["iron_clarification"] = {
+            "last_reminder_ts": now_ts,
+            "last_key": key,
+            "pending": data.get("iron_rich_clarification"),
+            "status": "awaiting_lisa",
+        }
+        self._save_health_message_state(state)
 
     def _maybe_add_health_line(
         self,
@@ -515,6 +533,26 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
                 ])
                 if record_food_reminder:
                     self._record_health_reminder("food", food_key, now_ts=now_ts)
+
+        if only_kind in {None, "food"} and data.get("iron_rich_clarification_needed") is True:
+            clarification = data.get("iron_rich_clarification")
+            if isinstance(clarification, dict) and clarification.get("question"):
+                clarification_key = self._iron_clarification_key(data)
+                if self._health_reminder_allowed(
+                    "iron_clarification", clarification_key, now_ts=now_ts
+                ):
+                    lines.extend([
+                        "- Отдельное уточнение для проверки железонасыщенной еды. Не утверждай, "
+                        "что был трёхдневный разрыв: окно пока unknown.",
+                        f"- Задай Лисе ровно один вопрос и больше ничего не уточняй в этом ходе: {clarification['question']}",
+                        "- После ответа обнови точную дату штатным health-diary маршрутом и "
+                        "пересчитай окно. Если Лиса не помнит, запиши явное unknown и не "
+                        "превращай его в отрицательный день.",
+                        "- Это уточнение независимо от двухчасового food later: не запускай "
+                        "для него defer-food-pressure.py.",
+                    ])
+                    if record_food_reminder:
+                        self._record_iron_clarification(data, now_ts=now_ts)
 
         if only_kind in {None, "food"} and data.get("iron_rich_signal_ready") is True:
             iron_key = self._iron_reminder_key(data)
