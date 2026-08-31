@@ -20,6 +20,7 @@ Gauges (current value):
 Counters (monotonically increasing):
     pulse_triggers_total{reason}              — triggers fired by reason
     pulse_trigger_failures_total{reason}      — trigger attempts that failed
+    pulse_trigger_ambiguous_total{reason}     — trigger deliveries with unknown outcome
     pulse_feedback_total{outcome}             — feedback calls by outcome
     pulse_turn_count_total                    — total agent turns
     pulse_instincts_fired_total{instinct}     — instinct executions
@@ -141,6 +142,7 @@ class PulseMetrics:
         # Trigger reason counters {reason: {"fired": int, "failed": int}}
         self._trigger_counts: Dict[str, int] = {}
         self._trigger_failure_counts: Dict[str, int] = {}
+        self._trigger_ambiguous_counts: Dict[str, int] = {}
         # Instinct fire counters
         self._instinct_counts: Dict[str, int] = {}
 
@@ -151,13 +153,17 @@ class PulseMetrics:
         key = outcome if outcome in self._feedback_counts else "blocked"
         self._feedback_counts[key] = self._feedback_counts.get(key, 0) + 1
 
-    def record_trigger(self, reason: str, success: bool) -> None:
+    def record_trigger(self, reason: str, success: bool | None) -> None:
         """Increment trigger counter. Call from daemon after each trigger attempt."""
-        if success:
+        if success is True:
             self._trigger_counts[reason] = self._trigger_counts.get(reason, 0) + 1
-        else:
+        elif success is False:
             self._trigger_failure_counts[reason] = (
                 self._trigger_failure_counts.get(reason, 0) + 1
+            )
+        else:
+            self._trigger_ambiguous_counts[reason] = (
+                self._trigger_ambiguous_counts.get(reason, 0) + 1
             )
 
     def record_instinct(self, instinct_name: str) -> None:
@@ -267,6 +273,18 @@ class PulseMetrics:
             "counter",
             "Total trigger attempts that did not fire, labelled by reason.",
             failure_samples,
+        )
+
+        ambiguous_samples = [
+            ({"reason": reason}, float(count))
+            for reason, count in self._trigger_ambiguous_counts.items()
+        ] or [({"reason": "_none"}, 0.0)]
+
+        lines += _metric_block(
+            "pulse_trigger_ambiguous_total",
+            "counter",
+            "Total trigger deliveries whose admission outcome remained unknown.",
+            ambiguous_samples,
         )
 
         # ── pulse_feedback_total ─────────────────────────────

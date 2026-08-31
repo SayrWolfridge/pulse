@@ -33,6 +33,7 @@ from pulse.src.core.events import (
     TRIGGER_START,
     TRIGGER_SUCCESS,
     TRIGGER_FAILURE,
+    TRIGGER_AMBIGUOUS,
     MUTATION_APPLIED,
 )
 from pulse.src.instincts import InstinctExecutor, InstinctRegistry
@@ -132,6 +133,7 @@ class PulseDaemon:
         if self.daily_sync:
             self.bus.on(TRIGGER_SUCCESS, self._on_trigger_daily_sync)
             self.bus.on(TRIGGER_FAILURE, self._on_trigger_daily_sync)
+            self.bus.on(TRIGGER_AMBIGUOUS, self._on_trigger_daily_sync)
             self.bus.on(MUTATION_APPLIED, self._on_mutation_daily_sync)
 
         # Nervous system — all 19 modules
@@ -557,15 +559,20 @@ class PulseDaemon:
 
         self._apply_trigger_drive_outcome(decision, delivery_success=success)
 
-        if success:
+        if success is True:
             self.state.log_trigger(decision, success=True)
             self.bus.emit(
                 TRIGGER_SUCCESS, decision=decision, success=True, turn=self.turn_count
             )
-        else:
+        elif success is False:
             self.state.log_trigger(decision, success=False)
             self.bus.emit(
                 TRIGGER_FAILURE, decision=decision, success=False, turn=self.turn_count
+            )
+        else:
+            self.state.log_trigger(decision, success=None)
+            self.bus.emit(
+                TRIGGER_AMBIGUOUS, decision=decision, success=None, turn=self.turn_count
             )
 
         # Record in Prometheus metrics if available
@@ -574,7 +581,7 @@ class PulseDaemon:
             self.health.metrics.record_trigger(reason, success)
 
         # NERVOUS SYSTEM — post-trigger
-        if self.nervous_system:
+        if self.nervous_system and success is not None:
             try:
                 self.nervous_system.post_trigger(decision, success)
             except Exception as e:
@@ -584,7 +591,9 @@ class PulseDaemon:
         if self._model_evaluator and hasattr(self.evaluator, "record_trigger"):
             self.evaluator.record_trigger(decision, success)
 
-    def _apply_trigger_drive_outcome(self, decision, *, delivery_success: bool) -> None:
+    def _apply_trigger_drive_outcome(
+        self, decision, *, delivery_success: bool | None
+    ) -> None:
         """Apply pressure feedback using the owner's terminal result.
 
         Webhook delivery is the ordinary owner for non-Git turns. For Git turns,
@@ -607,10 +616,12 @@ class PulseDaemon:
                     "Git result delivered without drive decay: outcome=%s",
                     git_result.get("outcome"),
                 )
-        elif delivery_success:
+        elif delivery_success is True:
             self.drives.on_trigger_success(decision)
-        else:
+        elif delivery_success is False:
             self.drives.on_trigger_failure(decision)
+        else:
+            logger.info("Ambiguous webhook delivery leaves drive pressure unchanged")
 
     def _handle_suppressed_trigger(self, decision, suppression: dict):
         """Resolve a trigger mechanically without waking the agent/model."""

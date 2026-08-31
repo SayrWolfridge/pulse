@@ -47,18 +47,24 @@ class RuntimeBridge:
         """
         Wire bridge hooks into an existing PulseDaemon.
 
-        - Subscribes to TRIGGER_START, TRIGGER_SUCCESS, TRIGGER_FAILURE on bus
+        - Subscribes to trigger lifecycle events on the bus
         - Registers self on daemon.runtime_bridge for context injection calls
         - Idempotent: safe to call multiple times
         """
         if self._attached:
             return
 
-        from pulse.src.core.events import TRIGGER_START, TRIGGER_SUCCESS, TRIGGER_FAILURE
+        from pulse.src.core.events import (
+            TRIGGER_AMBIGUOUS,
+            TRIGGER_FAILURE,
+            TRIGGER_START,
+            TRIGGER_SUCCESS,
+        )
 
         daemon.bus.on(TRIGGER_START, self.on_trigger_start)
         daemon.bus.on(TRIGGER_SUCCESS, self.on_trigger_end)
         daemon.bus.on(TRIGGER_FAILURE, self.on_trigger_end)
+        daemon.bus.on(TRIGGER_AMBIGUOUS, self.on_trigger_end)
 
         # Let daemon reference us for context injection in _trigger_turn
         daemon.runtime_bridge = self
@@ -229,9 +235,11 @@ class RuntimeBridge:
         except Exception as e:
             logger.warning(f"on_trigger_start error: {e}")
 
-    def on_trigger_end(self, decision, success: bool, turn: int = 0, **kwargs) -> None:
+    def on_trigger_end(
+        self, decision, success: bool | None, turn: int = 0, **kwargs
+    ) -> None:
         """
-        Called on TRIGGER_SUCCESS or TRIGGER_FAILURE.
+        Called when webhook delivery succeeds, fails, or remains ambiguous.
 
         - Clears ThoughtLoop session gate
         - Logs trigger_end event (with duration) to hot tier
@@ -253,7 +261,13 @@ class RuntimeBridge:
             try:
                 reason = getattr(decision, "reason", "unknown")
                 pressure = getattr(decision, "total_pressure", 0.0)
-                outcome = "success" if success else "failure"
+                outcome = (
+                    "success"
+                    if success is True
+                    else "failure"
+                    if success is False
+                    else "ambiguous"
+                )
                 self.runtime.context.log_event(
                     {
                         "type": "pulse_trigger_end",

@@ -41,5 +41,6 @@ class EventBus:
 TRIGGER_START = "trigger_start"
 TRIGGER_SUCCESS = "trigger_success"
 TRIGGER_FAILURE = "trigger_failure"
+TRIGGER_AMBIGUOUS = "trigger_ambiguous"
 MUTATION_APPLIED = "mutation_applied"
 STATE_SAVED = "state_saved"

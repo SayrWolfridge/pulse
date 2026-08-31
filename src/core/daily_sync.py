@@ -59,14 +59,19 @@ class DailyNoteSync:
             self._header_written = True
 
     def log_trigger(
-        self, turn: int, reason: str, top_drive: str, pressure: float, success: bool
+        self,
+        turn: int,
+        reason: str,
+        top_drive: str,
+        pressure: float,
+        success: bool | None,
     ):
         """Log a trigger event."""
         try:
             path = self._get_file()
             path.parent.mkdir(parents=True, exist_ok=True)
             now = datetime.now().strftime("%H:%M")
-            status = "✅" if success else "❌"
+            status = "✅" if success is True else "❌" if success is False else "❔"
             with open(path, "a") as f:
                 fcntl.flock(f, fcntl.LOCK_EX)
                 try:

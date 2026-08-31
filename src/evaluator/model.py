@@ -401,7 +401,7 @@ class ModelEvaluator:
             recommend_generate=recommend,
         )
 
-    def record_trigger(self, decision: TriggerDecision, success: bool):
+    def record_trigger(self, decision: TriggerDecision, success: bool | None):
         """Record a trigger for history context in future evaluations."""
         self._trigger_history.append(
             {

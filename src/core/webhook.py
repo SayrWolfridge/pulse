@@ -10,17 +10,21 @@ The isolated approach lets Pulse-triggered work happen in the background
 while the main session stays clean for human conversation.
 """
 
+import asyncio
 import json
 import logging
 import re
 from typing import Optional
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import aiohttp
 
 from pulse.src.core.config import PulseConfig
 
 logger = logging.getLogger("pulse.webhook")
+HOOK_REQUEST_TIMEOUT_SECONDS = 20
+HOOK_MAX_ATTEMPTS = 2
 
 
 def _ssl_for_url(url: str):
@@ -56,7 +60,7 @@ class OpenClawWebhook:
             self._session = aiohttp.ClientSession()
         return self._session
 
-    async def trigger(self, message: str, name: str = "Pulse") -> bool:
+    async def trigger(self, message: str, name: str = "Pulse") -> bool | None:
         """
         Trigger an agent turn via OpenClaw webhook.
 
@@ -69,7 +73,8 @@ class OpenClawWebhook:
             name: Human-readable name for the hook
 
         Returns:
-            True if webhook accepted (202), False otherwise
+            True for accepted admission, False for proven non-admission, and
+            None when delivery remains ambiguous after one same-key replay.
         """
         session = await self._get_session()
 
@@ -78,6 +83,8 @@ class OpenClawWebhook:
         }
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
+        request_id = f"pulse-{uuid4().hex}"
+        headers["Idempotency-Key"] = request_id
 
         payload = self._build_payload(message=message, name=name)
 
@@ -88,40 +95,100 @@ class OpenClawWebhook:
         except Exception as log_err:
             logger.warning(f"Failed to log webhook payload: {log_err}")
 
-        try:
-            async with session.post(
-                self.url,
-                json=payload,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10),
-                ssl=_ssl_for_url(self.url),
-            ) as resp:
-                if resp.status in (200, 202):
-                    run_id = None
-                    try:
-                        body = await resp.json()
-                        run_id = body.get("runId")
-                    except Exception:
-                        pass
-                    mode_str = (
-                        "isolated" if self.session_mode == "isolated" else "persistent"
-                    )
-                    logger.info(
-                        f"Webhook accepted (202) — mode={mode_str}"
-                        + (f", runId={run_id}" if run_id else "")
-                    )
-                    return True
-                else:
+        for attempt in range(1, HOOK_MAX_ATTEMPTS + 1):
+            try:
+                async with session.post(
+                    self.url,
+                    json=payload,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=HOOK_REQUEST_TIMEOUT_SECONDS),
+                    ssl=_ssl_for_url(self.url),
+                ) as resp:
+                    if resp.status in (200, 202):
+                        try:
+                            body = await resp.json()
+                            run_id = body.get("runId")
+                        except Exception as exc:
+                            logger.warning(
+                                "Webhook acceptance body unreadable "
+                                "(attempt=%s/%s, request_id=%s): %s",
+                                attempt,
+                                HOOK_MAX_ATTEMPTS,
+                                request_id,
+                                exc,
+                            )
+                            if attempt < HOOK_MAX_ATTEMPTS:
+                                continue
+                            return None
+
+                        if not isinstance(run_id, str) or not run_id.strip():
+                            logger.warning(
+                                "Webhook acceptance missing runId "
+                                "(attempt=%s/%s, request_id=%s)",
+                                attempt,
+                                HOOK_MAX_ATTEMPTS,
+                                request_id,
+                            )
+                            if attempt < HOOK_MAX_ATTEMPTS:
+                                continue
+                            return None
+
+                        mode_str = (
+                            "isolated"
+                            if self.session_mode == "isolated"
+                            else "persistent"
+                        )
+                        logger.info(
+                            "Webhook accepted — mode=%s, runId=%s, request_id=%s, "
+                            "attempt=%s",
+                            mode_str,
+                            run_id,
+                            request_id,
+                            attempt,
+                        )
+                        return True
+
                     body = await resp.text()
-                    logger.warning(f"Webhook returned {resp.status}: {body[:200]}")
+                    logger.warning(
+                        "Webhook explicitly rejected request_id=%s with %s: %s",
+                        request_id,
+                        resp.status,
+                        body[:200],
+                    )
                     return False
 
-        except aiohttp.ClientError as e:
-            logger.error(f"Webhook connection error: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Webhook unexpected error: {e}")
-            return False
+            except (aiohttp.ClientConnectorError, aiohttp.InvalidURL) as exc:
+                logger.error(
+                    "Webhook not sent (request_id=%s): %s", request_id, exc
+                )
+                return False
+            except (asyncio.TimeoutError, aiohttp.ClientConnectionError) as exc:
+                logger.warning(
+                    "Webhook outcome ambiguous (attempt=%s/%s, request_id=%s): %s",
+                    attempt,
+                    HOOK_MAX_ATTEMPTS,
+                    request_id,
+                    exc,
+                )
+                if attempt < HOOK_MAX_ATTEMPTS:
+                    continue
+                return None
+            except aiohttp.ClientError as exc:
+                logger.error(
+                    "Webhook client outcome ambiguous (request_id=%s): %s",
+                    request_id,
+                    exc,
+                )
+                return None
+            except Exception as exc:
+                logger.error(
+                    "Webhook unexpected outcome ambiguous (request_id=%s): %s",
+                    request_id,
+                    exc,
+                )
+                return None
+
+        return None
 
     def _build_payload(self, message: str, name: str) -> dict:
         """Translate Pulse session semantics to the current OpenClaw hook API."""

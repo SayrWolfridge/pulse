@@ -194,7 +194,7 @@ class StatePersistence:
             logger.warning(f"Failed to bootstrap drive diversity history: {exc}")
         return list(recent)
 
-    def log_trigger(self, decision, success: bool):
+    def log_trigger(self, decision, success: bool | None):
         """Log a trigger event to history."""
         entry = {
             "timestamp": time.time(),
@@ -205,7 +205,7 @@ class StatePersistence:
         }
 
         recent_successful_drives = None
-        if success and entry["top_drive"]:
+        if success is True and entry["top_drive"]:
             recent_successful_drives = self.recent_successful_top_drives()
             recent_successful_drives.append(entry["top_drive"])
             recent_successful_drives = recent_successful_drives[
@@ -225,7 +225,7 @@ class StatePersistence:
         trigger_count = self._data.get("total_triggers", 0)
         self._data["total_triggers"] = trigger_count + 1
 
-        if success:
+        if success is True:
             success_count = self._data.get("successful_triggers", 0)
             self._data["successful_triggers"] = success_count + 1
             if recent_successful_drives is not None:
