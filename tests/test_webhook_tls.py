@@ -8,7 +8,11 @@ import pytest
 
 from pulse.src.core.config import PulseConfig
 from pulse.src.core.daemon import PulseDaemon
-from pulse.src.core.webhook import OpenClawWebhook, _ssl_for_url
+from pulse.src.core.webhook import (
+    OpenClawWebhook,
+    _redact_payload_for_log,
+    _ssl_for_url,
+)
 from pulse.src.metrics import PulseMetrics
 
 
@@ -72,6 +76,23 @@ def test_disables_tls_verification_for_https_loopback():
 def test_keeps_default_tls_verification_for_non_loopback():
     assert _ssl_for_url("https://gateway.example/hooks/agent") is None
     assert _ssl_for_url("http://127.0.0.1:18789/hooks/agent") is None
+
+
+def test_redacts_result_callback_token_without_changing_transport_payload():
+    payload = {
+        "message": "hello",
+        "resultCallback": {
+            "url": "http://127.0.0.1:9720/openclaw/turn-result",
+            "kind": "pulse.emotions.write_diary_note",
+            "token": "callback-secret",
+        },
+    }
+
+    safe_payload = _redact_payload_for_log(payload)
+
+    assert safe_payload["resultCallback"]["token"] == "***"
+    assert safe_payload["resultCallback"]["url"] == payload["resultCallback"]["url"]
+    assert payload["resultCallback"]["token"] == "callback-secret"
 
 
 def test_main_mode_uses_current_persistent_hook_contract():

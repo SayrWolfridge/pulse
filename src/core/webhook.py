@@ -35,6 +35,18 @@ def _ssl_for_url(url: str):
     return None
 
 
+def _redact_payload_for_log(payload: dict) -> dict:
+    """Return a log-safe copy without callback credentials."""
+    safe_payload = dict(payload)
+    result_callback = safe_payload.get("resultCallback")
+    if isinstance(result_callback, dict):
+        safe_callback = dict(result_callback)
+        if "token" in safe_callback:
+            safe_callback["token"] = "***"
+        safe_payload["resultCallback"] = safe_callback
+    return safe_payload
+
+
 class OpenClawWebhook:
     """Triggers OpenClaw agent turns via webhook."""
 
@@ -91,7 +103,12 @@ class OpenClawWebhook:
         # DEBUG: логируем точный payload до отправки (включая sessionKey/channel/to)
         try:
             safe_headers = {k: ("***" if k.lower() == "authorization" else v) for k, v in headers.items()}
-            logger.info("[PULSE→HOOK] url=%s headers=%s payload_json=%s", self.url, safe_headers, json.dumps(payload, ensure_ascii=False))
+            logger.info(
+                "[PULSE→HOOK] url=%s headers=%s payload_json=%s",
+                self.url,
+                safe_headers,
+                json.dumps(_redact_payload_for_log(payload), ensure_ascii=False),
+            )
         except Exception as log_err:
             logger.warning(f"Failed to log webhook payload: {log_err}")
 
