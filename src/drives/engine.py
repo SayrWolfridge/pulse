@@ -1439,6 +1439,10 @@ class DriveEngine:
         now = datetime.now().astimezone()
         food_hold_active = self._health_food_hold_active(workspace_root, now=now)
         state_data["food_context_hold_active"] = food_hold_active
+        # Workspace health rules are read live by the running daemon. This
+        # handshake keeps the new iron-gap rule inert until a Pulse process
+        # containing the matching owner code has actually been restarted.
+        state_data["iron_rich_rule_contract_v1"] = True
 
         today = now.strftime("%Y-%m-%d")
         fired_state = {}
@@ -1489,7 +1493,11 @@ class DriveEngine:
 
             effect = rule["effect"]
             drive_name = effect.get("drive", "health")
-            if drive_name == self.HEALTH_FOOD_DRIVE and food_hold_active:
+            if (
+                drive_name == self.HEALTH_FOOD_DRIVE
+                and food_hold_active
+                and not rule.get("independent_of_food_context_hold", False)
+            ):
                 continue
             if drive_name not in self.drives:
                 category = "health" if self._is_health_drive(drive_name) else drive_name

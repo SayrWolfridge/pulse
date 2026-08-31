@@ -362,6 +362,11 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
             return True
         if not isinstance(last_ts, (int, float)):
             return True
+        if kind == "iron_rich":
+            # The key contains the health-day date. A recorded reminder stays
+            # closed for that entire day; the next date naturally creates a
+            # new key. The immediate-food two-hour cadence does not apply.
+            return False
         return now_ts - float(last_ts) >= self.HEALTH_REMINDER_COOLDOWN_SECONDS
 
     def _record_health_reminder(self, kind: str, key: dict, *, now_ts: float) -> None:
@@ -394,6 +399,14 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
             self._food_reminder_key(data),
             now_ts=now_ts,
         )
+
+    def _iron_reminder_key(self, data: dict) -> dict:
+        return {
+            "kind": "iron_rich",
+            "date": data.get("date"),
+            "gap_days": data.get("iron_rich_gap_days"),
+            "window_dates": data.get("iron_rich_window_dates") or [],
+        }
 
     def _maybe_add_health_line(
         self,
@@ -502,6 +515,26 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
                 ])
                 if record_food_reminder:
                     self._record_health_reminder("food", food_key, now_ts=now_ts)
+
+        if only_kind in {None, "food"} and data.get("iron_rich_signal_ready") is True:
+            iron_key = self._iron_reminder_key(data)
+            if self._health_reminder_allowed("iron_rich", iron_key, now_ts=now_ts):
+                window_dates = data.get("iron_rich_window_dates") or []
+                window_text = ", ".join(str(value) for value in window_dates)
+                lines.extend([
+                    "- Отдельный спокойный факт: за три завершённых и достаточно заполненных дня "
+                    f"({window_text}) в дневнике не видно говядины/телятины, печени, мидий, "
+                    "устриц или других явно названных моллюсков.",
+                    "- Это не срочное «поешь сейчас» и не диагноз. При случае сегодня можно "
+                    "выбрать, например, говядину или мидии; БАДы не предлагай.",
+                    "- Обычная полноценная еда и ответ «поем позже» не закрывают этот отдельный "
+                    "факт. Закрывает его только qualifying-запись в дневнике; не запускай для "
+                    "него двухчасовой defer-food-pressure.py.",
+                ])
+                if record_food_reminder:
+                    self._record_health_reminder(
+                        "iron_rich", iron_key, now_ts=now_ts
+                    )
 
         if only_kind in {None, "sleep"} and after(16) and data.get("sleep_logged") is False:
             self._maybe_add_health_line(

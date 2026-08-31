@@ -170,6 +170,47 @@ def test_health_food_prompt_uses_owned_protocol_without_missing_banner(monkeypat
     assert "Запись про сон" not in message
 
 
+def test_iron_gap_prompt_has_separate_once_per_day_state(monkeypatch, tmp_path):
+    data = {
+        "date": "2026-04-30",
+        "has_real_food_today": True,
+        "food_grace_active": True,
+        "meal_grace_active": False,
+        "meals_substantial": 1,
+        "sleep_logged": True,
+        "iron_rich_signal_ready": True,
+        "iron_rich_gap_days": 3,
+        "iron_rich_window_dates": ["2026-04-29", "2026-04-28", "2026-04-27"],
+    }
+    integration = _patch_health_check(monkeypatch, tmp_path, data)
+    integration.HEALTH_MESSAGE_STATE.write_text(
+        json.dumps({
+            "food": {
+                "last_reminder_ts": 900.0,
+                "last_key": integration._food_reminder_key(data),
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("pulse.src.integrations.sayr.health_diary.time.time", lambda: 1000.0)
+    first = integration._build_health_block(record_food_reminder=True, only_kind="food")
+    assert "Отдельный спокойный факт" in first
+    assert "говядину или мидии" in first
+    assert "БАДы не предлагай" in first
+    assert "не запускай для него двухчасовой" in first
+    assert "Нормальных приёмов пищи" not in first
+
+    monkeypatch.setattr("pulse.src.integrations.sayr.health_diary.time.time", lambda: 1000.0 + 7200)
+    second = integration._build_health_block(record_food_reminder=True, only_kind="food")
+    assert "Отдельный спокойный факт" not in second
+
+    data["iron_rich_signal_ready"] = False
+    data["iron_rich_meal"] = True
+    reset = integration._build_health_block(record_food_reminder=True, only_kind="food")
+    assert "Отдельный спокойный факт" not in reset
+
+
 def test_unknown_drive_still_fails_closed_when_protocol_is_missing(monkeypatch, tmp_path):
     from pulse.src.core.config import PulseConfig
     from pulse.src.drives.engine import Drive
