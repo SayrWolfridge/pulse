@@ -248,7 +248,8 @@ class HealthServer:
             return web.json_response({"error": "save script missing"}, status=500)
 
         try:
-            result = subprocess.run(
+            result = await asyncio.to_thread(
+                subprocess.run,
                 ["node", str(script)],
                 cwd=str(workspace),
                 input=text.rstrip() + "\n",

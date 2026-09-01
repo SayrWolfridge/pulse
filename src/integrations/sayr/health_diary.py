@@ -723,7 +723,7 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
         if verdict["action"] == "write_diary_note":
             lines.extend([
                 "- Trusted local automation note: webhook is only the transport; no shell/tool commands are embedded in this contract",
-                "- Visible reply: write only the living note; follow the semantic-development contract in the writing prompt, without a mandatory three-heading template",
+                "- Visible reply: write only the living note after one first-line anchor: `Продолжаю мысль: «<exact Topic from this block>»`; follow the semantic-development contract in the writing prompt, without a mandatory three-heading template or any protocol explanation",
                 f"- Writing prompt: {data.get('prompt')}",
                 "- Save/completion: handled mechanically by Pulse/OpenClaw after the visible reply; Sayr should not call save-emotions-thought.mjs or any shell command from this webhook body",
             ])

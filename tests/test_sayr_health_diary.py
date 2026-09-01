@@ -353,6 +353,8 @@ def test_emotions_write_contract_contains_no_shell_command(monkeypatch):
 
     assert "webhook is only the transport" in block
     assert "Visible reply: write only the living note" in block
+    assert "Продолжаю мысль" in block
+    assert "<exact Topic from this block>" in block
     assert "without a mandatory three-heading template" in block
     assert "Save/completion: handled mechanically" in block
     assert "openclaw-safe-run" not in block

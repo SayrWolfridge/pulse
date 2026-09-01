@@ -27,6 +27,7 @@ async def test_openclaw_turn_result_saves_emotions_reply(monkeypatch, tmp_path):
     server = HealthServer(daemon, port=9798)
 
     calls = []
+    offloads = []
 
     def fake_run(args, **kwargs):
         calls.append((args, kwargs))
@@ -36,7 +37,12 @@ async def test_openclaw_turn_result_saves_emotions_reply(monkeypatch, tmp_path):
             stderr="",
         )
 
+    async def fake_to_thread(func, *args, **kwargs):
+        offloads.append(func)
+        return func(*args, **kwargs)
+
     monkeypatch.setattr("pulse.src.core.health.subprocess.run", fake_run)
+    monkeypatch.setattr("pulse.src.core.health.asyncio.to_thread", fake_to_thread)
     monkeypatch.setattr("pulse.src.core.health.Path.exists", lambda self: True)
 
     response = await server._handle_openclaw_turn_result(
@@ -53,6 +59,7 @@ async def test_openclaw_turn_result_saves_emotions_reply(monkeypatch, tmp_path):
 
     assert response.status == 200
     assert calls
+    assert offloads == [fake_run]
     assert calls[0][1]["input"] == "exact visible reply\n"
 
 
