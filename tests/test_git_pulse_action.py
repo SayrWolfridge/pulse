@@ -1,3 +1,4 @@
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import Mock
@@ -128,6 +129,88 @@ def test_executor_preserves_trailing_spaces_and_accepts_ordinary_large_markdown(
     assert result.outcome == "committed"
     assert result.committed_files == ["memory/large.md"]
     assert _git(repo, "show", "HEAD:memory/large.md").stdout == content
+
+
+def test_executor_stages_topic_map_only_for_exact_note_companions(tmp_path):
+    def prepare(root: Path, *, unrelated_change: bool) -> tuple[Path, list[str]]:
+        root.mkdir()
+        repo = _repo(root)
+        garden = repo / "semantic-garden" / "sayr-thoughts"
+        garden.mkdir(parents=True)
+        note_paths = [
+            "semantic-garden/sayr-thoughts/first.md",
+            "semantic-garden/sayr-thoughts/second.md",
+        ]
+        families = [
+            {
+                "id": "first",
+                "runtime_hint": "keep",
+                "touch_count": 3,
+                "last_touched_at": "2026-08-01T00:00:00Z",
+            },
+            {
+                "id": "second",
+                "runtime_hint": "keep",
+                "touch_count": 7,
+                "last_touched_at": "2026-08-02T00:00:00Z",
+            },
+        ]
+        topic_map = garden / "topic-map.json"
+        topic_map.write_text(
+            json.dumps({"schema": "test", "families": families}, ensure_ascii=False, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
+        _git(repo, "add", "semantic-garden/sayr-thoughts/topic-map.json")
+        _git(repo, "commit", "-m", "add topic map")
+        texts = ["first result", "second result"]
+        for relative_path, text in zip(note_paths, texts, strict=True):
+            (repo / relative_path).write_text(text + "\n", encoding="utf-8")
+        updated = json.loads(topic_map.read_text(encoding="utf-8"))
+        for index, family in enumerate(updated["families"]):
+            stamp = f"2026-09-02T00:00:0{index}Z"
+            family.update({
+                "touch_count": family["touch_count"] + 1,
+                "last_touched_at": stamp,
+                "last_meaningful_result": texts[index],
+                "last_result_source": note_paths[index],
+                "last_result_at": stamp,
+            })
+        if unrelated_change:
+            updated["families"][0]["runtime_hint"] = "changed"
+        topic_map.write_text(
+            json.dumps(updated, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return repo, note_paths
+
+    valid_repo, valid_notes = prepare(tmp_path / "valid", unrelated_change=False)
+    valid = execute_git_maintenance(
+        _decision(str(valid_repo)), receipt_dir=tmp_path / "valid-receipts",
+    )
+
+    assert valid is not None
+    assert valid.outcome == "committed"
+    assert valid.resolves_drive is True
+    assert valid.committed_files == sorted([
+        *valid_notes,
+        "semantic-garden/sayr-thoughts/topic-map.json",
+    ])
+    assert _git(valid_repo, "status", "--short").stdout == ""
+
+    invalid_repo, invalid_notes = prepare(tmp_path / "invalid", unrelated_change=True)
+    invalid = execute_git_maintenance(
+        _decision(str(invalid_repo)), receipt_dir=tmp_path / "invalid-receipts",
+    )
+
+    assert invalid is not None
+    assert invalid.outcome == "committed_partial"
+    assert invalid.resolves_drive is False
+    assert invalid.committed_files == invalid_notes
+    assert invalid.remaining_files == ["semantic-garden/sayr-thoughts/topic-map.json"]
+    assert _git(invalid_repo, "diff", "--name-only").stdout.strip() == (
+        "semantic-garden/sayr-thoughts/topic-map.json"
+    )
 
 
 def test_executor_fails_closed_when_index_is_not_empty(tmp_path):

@@ -14,6 +14,14 @@ from typing import Any
 # guard, not a prompt/output limit.
 MAX_NOTE_BYTES = 25 * 1024 * 1024
 DEFAULT_RECEIPT_DIR = Path("~/.pulse/state/git-maintenance").expanduser()
+TOPIC_MAP_PATH = "semantic-garden/sayr-thoughts/topic-map.json"
+TOPIC_MAP_RESULT_KEYS = {
+    "touch_count",
+    "last_touched_at",
+    "last_meaningful_result",
+    "last_result_source",
+    "last_result_at",
+}
 
 
 @dataclass(frozen=True)
@@ -230,6 +238,92 @@ def _is_safe_addition(repo_name: str | None, repo_path: Path, relative_path: str
         return False
 
 
+def _note_result_text(path: Path) -> str | None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+    if text.endswith("\r\n"):
+        return text[:-2]
+    if text.endswith("\n"):
+        return text[:-1]
+    return text
+
+
+def _safe_topic_map_companion(
+    repo_name: str | None,
+    repo_path: Path,
+    eligible_notes: list[str],
+) -> str | None:
+    if repo_name != "workspace":
+        return None
+    note_texts: dict[str, str] = {}
+    garden = PurePosixPath("semantic-garden/sayr-thoughts")
+    for relative_path in eligible_notes:
+        posix = PurePosixPath(relative_path.replace("\\", "/"))
+        if garden not in posix.parents:
+            continue
+        text = _note_result_text(repo_path.joinpath(*posix.parts))
+        if text is None:
+            return None
+        note_texts[posix.as_posix()] = text
+    if not note_texts:
+        return None
+
+    baseline = _run_git(repo_path.as_posix(), ["show", f"HEAD:{TOPIC_MAP_PATH}"])
+    if baseline.returncode != 0:
+        return None
+    try:
+        before = json.loads(baseline.stdout)
+        after = json.loads((repo_path / TOPIC_MAP_PATH).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return None
+    if {key: value for key, value in before.items() if key != "families"} != {
+        key: value for key, value in after.items() if key != "families"
+    }:
+        return None
+    before_families = before.get("families")
+    after_families = after.get("families")
+    if not isinstance(before_families, list) or not isinstance(after_families, list):
+        return None
+    if len(before_families) != len(after_families):
+        return None
+
+    changed = 0
+    used_sources: set[str] = set()
+    for old_family, new_family in zip(before_families, after_families, strict=True):
+        if old_family == new_family:
+            continue
+        if not isinstance(old_family, dict) or not isinstance(new_family, dict):
+            return None
+        if old_family.get("id") != new_family.get("id"):
+            return None
+        changed_keys = {
+            key for key in old_family.keys() | new_family.keys()
+            if old_family.get(key) != new_family.get(key)
+        }
+        if changed_keys != TOPIC_MAP_RESULT_KEYS:
+            return None
+        old_count = old_family.get("touch_count")
+        if not isinstance(old_count, int) or new_family.get("touch_count") != old_count + 1:
+            return None
+        source = new_family.get("last_result_source")
+        if not isinstance(source, str) or source not in note_texts or source in used_sources:
+            return None
+        if new_family.get("last_meaningful_result") != note_texts[source]:
+            return None
+        timestamp = new_family.get("last_result_at")
+        if not isinstance(timestamp, str) or not timestamp:
+            return None
+        if new_family.get("last_touched_at") != timestamp:
+            return None
+        used_sources.add(source)
+        changed += 1
+    return TOPIC_MAP_PATH if changed else None
+
+
 def _write_receipt(result: GitMaintenanceResult, receipt_dir: Path) -> GitMaintenanceResult:
     receipt_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
@@ -288,6 +382,13 @@ def execute_git_maintenance(decision: Any, *, receipt_dir: Path | None = None) -
             remaining_files=[path for _, path in entries],
             summary="No non-empty additive Markdown notes matched the safe allowlist",
         )
+    status_by_path = {path: status for status, path in entries}
+    companions: list[str] = []
+    if status_by_path.get(TOPIC_MAP_PATH) == " M":
+        companion = _safe_topic_map_companion(action.repo_name, repo_path, eligible)
+        if companion:
+            companions.append(companion)
+    stage_paths = sorted([*eligible, *companions])
 
     before_head = _git(str(repo_path), ["rev-parse", "HEAD"]).strip()
     if not before_head:
@@ -299,7 +400,7 @@ def execute_git_maintenance(decision: Any, *, receipt_dir: Path | None = None) -
                       remaining_files=[path for _, path in entries],
                       summary="HEAD changed during preflight")
 
-    add = _run_git(str(repo_path), ["add", "--", *eligible])
+    add = _run_git(str(repo_path), ["add", "--", *stage_paths])
     if add.returncode != 0:
         return finish(outcome="failed", resolves_drive=False, before_head=before_head,
                       remaining_files=[path for _, path in _status_entries(str(repo_path))],
@@ -309,11 +410,15 @@ def execute_git_maintenance(decision: Any, *, receipt_dir: Path | None = None) -
         path for status, path in after_add
         if status != "??" and status[0] != " "
     )
-    eligible_states = {path: status for status, path in after_add if path in eligible}
-    safe_index = staged_now == eligible and all(eligible_states.get(path) == "A " for path in eligible)
+    staged_states = {path: status for status, path in after_add if path in stage_paths}
+    expected_states = {
+        **{path: "A " for path in eligible},
+        **{path: "M " for path in companions},
+    }
+    safe_index = staged_now == stage_paths and staged_states == expected_states
     head_unchanged = _git(str(repo_path), ["rev-parse", "HEAD"]).strip() == before_head
     if not safe_index or not head_unchanged:
-        _run_git(str(repo_path), ["restore", "--staged", "--", *eligible])
+        _run_git(str(repo_path), ["restore", "--staged", "--", *stage_paths])
         return finish(outcome="blocked", resolves_drive=False, before_head=before_head,
                       remaining_files=[path for _, path in _status_entries(str(repo_path))],
                       summary="Repository changed during staging; Pulse rolled back its index entries")
@@ -328,7 +433,7 @@ def execute_git_maintenance(decision: Any, *, receipt_dir: Path | None = None) -
         timeout=30,
     )
     if commit.returncode != 0:
-        _run_git(str(repo_path), ["restore", "--staged", "--", *eligible])
+        _run_git(str(repo_path), ["restore", "--staged", "--", *stage_paths])
         return finish(outcome="failed", resolves_drive=False, before_head=before_head,
                       remaining_files=[path for _, path in _status_entries(str(repo_path))],
                       summary="git commit failed; Pulse rolled back its index entries")
@@ -348,7 +453,7 @@ def execute_git_maintenance(decision: Any, *, receipt_dir: Path | None = None) -
         resolves_drive=not remaining,
         before_head=before_head,
         commit_hash=commit_hash,
-        committed_files=eligible,
+        committed_files=stage_paths,
         remaining_files=remaining,
         summary=("Safe additive notes committed; repository is clean" if not remaining
                  else "Safe additive notes committed; disallowed changes remain for review"),
