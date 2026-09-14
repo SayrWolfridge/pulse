@@ -26,8 +26,9 @@ from pulse.src.evaluator.model import ModelEvaluator, ModelConfig
 from pulse.src.evolution.mutator import Mutator
 from pulse.src.state.persistence import StatePersistence
 from pulse.src.core.health import HealthServer
-from pulse.src.core.webhook import OpenClawWebhook
+from pulse.src.core.webhook import OpenClawWebhook, PersistentWebhookRoute
 from pulse.src.core.daily_sync import DailyNoteSync
+from pulse.src.core.vault_sync import VaultSyncWorker
 from pulse.src.core.events import (
     EventBus,
     TRIGGER_START,
@@ -95,6 +96,8 @@ class PulseDaemon:
         self._pid_fd = None  # file descriptor for PID lock
         self._last_generate_time: float = 0.0  # track GENERATE step timing
         self._shutdown_event: asyncio.Event | None = None
+        self._event_loop: asyncio.AbstractEventLoop | None = None
+        self.vault_sync = VaultSyncWorker(notify=self._submit_vault_sync_alert)
         self.runtime_bridge = (
             None  # set by HypostasRuntime.start() if Phase 1 is active
         )
@@ -104,6 +107,7 @@ class PulseDaemon:
         self.drives = DriveEngine(self.config, self.state)
         self.sensors = SensorManager(self.config)
         self.webhook = OpenClawWebhook(self.config)
+        self.git_webhook_route = self._configured_git_webhook_route()
         self.health = HealthServer(self, port=self.config.daemon.health_port)
         self.mutator = Mutator(self.config, self.drives, state=self.state)
         self.integration = _load_integration(self.config.daemon.integration)
@@ -216,6 +220,7 @@ class PulseDaemon:
         """The core cognitive loop. SENSE → EVALUATE → ACT."""
         # Install signal handlers via asyncio (C6 fix)
         loop = asyncio.get_running_loop()
+        self._event_loop = loop
         self._shutdown_event = asyncio.Event()
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, self._handle_shutdown)
@@ -279,6 +284,7 @@ class PulseDaemon:
             logger.info(f"Restored config overrides: {overrides}")
 
         self._restore_last_trigger_time()
+        self.vault_sync.start()
 
         try:
             logger.info("Entering main loop...")
@@ -471,11 +477,45 @@ class PulseDaemon:
         finally:
             # Async cleanup INSIDE the event loop (C2 fix)
             logger.info("Shutting down async resources...")
+            await asyncio.to_thread(self.vault_sync.stop)
             await self.sensors.stop()
             await self.webhook.close()
             await self.health.stop()
+            self._event_loop = None
             if self._model_evaluator and hasattr(self.evaluator, "close"):
                 await self.evaluator.close()
+
+    def _submit_vault_sync_alert(self, message: str, alert_id: str):
+        """Submit an independent vault alert to the dedicated Git route."""
+        if self._event_loop is None or self._event_loop.is_closed():
+            return False
+        return asyncio.run_coroutine_threadsafe(
+            self.webhook.trigger(
+                message,
+                name="Pulse Git sync",
+                idempotency_key=f"pulse-vault-{alert_id}",
+                route=self.git_webhook_route,
+            ),
+            self._event_loop,
+        )
+
+    def _configured_git_webhook_route(self) -> PersistentWebhookRoute | None:
+        openclaw = self.config.openclaw
+        if not (
+            openclaw.git_session_key and openclaw.git_channel and openclaw.git_to
+        ):
+            return None
+        return PersistentWebhookRoute(
+            session_key=openclaw.git_session_key,
+            channel=openclaw.git_channel,
+            to=openclaw.git_to,
+        )
+
+    def _route_for_decision(self, decision) -> PersistentWebhookRoute | None:
+        drive = getattr(decision, "top_drive", None)
+        if drive and str(getattr(drive, "name", "")).endswith("_git"):
+            return self.git_webhook_route
+        return None
 
     async def _trigger_turn(self, decision):
         """Trigger an OpenClaw agent turn via webhook."""
@@ -555,7 +595,10 @@ class PulseDaemon:
         )
 
         # Fire webhook
-        success = await self.webhook.trigger(message)
+        success = await self.webhook.trigger(
+            message,
+            route=self._route_for_decision(decision),
+        )
 
         self._apply_trigger_drive_outcome(decision, delivery_success=success)
 

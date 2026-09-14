@@ -1096,6 +1096,7 @@ class DriveEngine:
             current.get("closed_at"),
             current.get("completed_at"),
             current.get("last_discussed_at"),
+            current.get("discussed_at"),
             current.get("offered_at"),
         )
         anchor = None

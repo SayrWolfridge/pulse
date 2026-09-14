@@ -249,7 +249,8 @@ def test_sayr_receives_result_only_after_deterministic_execution(tmp_path, monke
     assert "GIT RESULT" in message
     assert "deterministic_no_model" in message
     assert "GIT ACTION" not in message
-    assert "do_not_run_git_or_spawn_subagents" in message
+    assert "analyze_in_settings_context" in message
+    assert "never merely repeat that automation failed" in message
     assert decision.top_drive.source_data["git_maintenance_result"]["outcome"] == "committed"
 
 

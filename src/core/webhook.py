@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import re
+from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -25,6 +26,14 @@ from pulse.src.core.config import PulseConfig
 logger = logging.getLogger("pulse.webhook")
 HOOK_REQUEST_TIMEOUT_SECONDS = 20
 HOOK_MAX_ATTEMPTS = 2
+
+
+@dataclass(frozen=True)
+class PersistentWebhookRoute:
+    session_key: str
+    channel: str
+    to: str
+    deliver: bool = True
 
 
 def _ssl_for_url(url: str):
@@ -72,7 +81,13 @@ class OpenClawWebhook:
             self._session = aiohttp.ClientSession()
         return self._session
 
-    async def trigger(self, message: str, name: str = "Pulse") -> bool | None:
+    async def trigger(
+        self,
+        message: str,
+        name: str = "Pulse",
+        idempotency_key: str | None = None,
+        route: PersistentWebhookRoute | None = None,
+    ) -> bool | None:
         """
         Trigger an agent turn via OpenClaw webhook.
 
@@ -95,10 +110,14 @@ class OpenClawWebhook:
         }
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
-        request_id = f"pulse-{uuid4().hex}"
+        if idempotency_key is not None and not re.fullmatch(
+            r"[A-Za-z0-9._:-]{1,128}", idempotency_key
+        ):
+            raise ValueError("invalid webhook idempotency key")
+        request_id = idempotency_key or f"pulse-{uuid4().hex}"
         headers["Idempotency-Key"] = request_id
 
-        payload = self._build_payload(message=message, name=name)
+        payload = self._build_payload(message=message, name=name, route=route)
 
         # DEBUG: логируем точный payload до отправки (включая sessionKey/channel/to)
         try:
@@ -150,11 +169,7 @@ class OpenClawWebhook:
                                 continue
                             return None
 
-                        mode_str = (
-                            "isolated"
-                            if self.session_mode == "isolated"
-                            else "persistent"
-                        )
+                        mode_str = payload["sessionMode"]
                         logger.info(
                             "Webhook accepted — mode=%s, runId=%s, request_id=%s, "
                             "attempt=%s",
@@ -207,13 +222,18 @@ class OpenClawWebhook:
 
         return None
 
-    def _build_payload(self, message: str, name: str) -> dict:
+    def _build_payload(
+        self,
+        message: str,
+        name: str,
+        route: PersistentWebhookRoute | None = None,
+    ) -> dict:
         """Translate Pulse session semantics to the current OpenClaw hook API."""
         payload = {
             "message": message,
             "name": name,
             "wakeMode": "now",
-            "deliver": self.deliver,
+            "deliver": route.deliver if route else self.deliver,
         }
 
         result_callback_kind = self._result_callback_kind(message)
@@ -225,12 +245,19 @@ class OpenClawWebhook:
             if self.token:
                 payload["resultCallback"]["token"] = self.token
 
+        if route is not None:
+            payload["sessionMode"] = "persistent"
+            payload["sessionKey"] = route.session_key
+            payload["channel"] = route.channel
+            payload["to"] = route.to
         # "main" is Pulse's legacy name for OpenClaw's persistent hook session.
-        if self.session_mode in {"main", "persistent"}:
+        elif self.session_mode in {"main", "persistent"}:
             payload["sessionMode"] = "persistent"
             payload["sessionKey"] = self.session_key
             payload["channel"] = "telegram"
-            payload["to"] = "312058326"
+            direct_target = re.search(r":direct:([^:]+)$", self.session_key or "")
+            if direct_target:
+                payload["to"] = direct_target.group(1)
         else:
             payload["sessionMode"] = "isolated"
             if self.isolated_model:
@@ -246,6 +273,12 @@ class OpenClawWebhook:
         )
         if conversation:
             return conversation.group(1)
+        vault_sync = re.search(
+            r"(?m)^PULSE_VAULT_SYNC_CALLBACK_KIND=(pulse\.vault_sync\.alert:[0-9a-f]{64})$",
+            message,
+        )
+        if vault_sync:
+            return vault_sync.group(1)
         return None
 
     async def wake(self, text: str) -> bool:

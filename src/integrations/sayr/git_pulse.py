@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -64,6 +64,8 @@ class GitMaintenanceResult:
     remaining_files: list[str]
     summary: str
     receipt_path: str | None = None
+    exchange_status: str | None = None
+    needs_attention: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -83,6 +85,9 @@ class GitMaintenanceResult:
         ]
         if self.commit_hash:
             lines.append(f"- commit: {self.commit_hash}")
+        if self.exchange_status:
+            lines.append(f"- vault_exchange: {self.exchange_status}")
+            lines.append(f"- needs_attention: {str(self.needs_attention).lower()}")
         if self.committed_files:
             lines.append("- committed_files:")
             lines.extend(f"  - {path}" for path in self.committed_files)
@@ -90,7 +95,9 @@ class GitMaintenanceResult:
             lines.append("- remaining_files_requiring_review:")
             lines.extend(f"  - {path}" for path in self.remaining_files)
         lines.append(
-            "- required_action_by_sayr: report_this_result_only; do_not_run_git_or_spawn_subagents"
+            "- required_action_by_sayr: analyze_in_settings_context; "
+            "use_read_only_tools_if_needed; continue_only_work_already_authorized; "
+            "ask_lisa_only_for_a_real_decision"
         )
         return "\n".join(lines)
 
@@ -339,6 +346,51 @@ def _write_receipt(result: GitMaintenanceResult, receipt_dir: Path) -> GitMainte
 
 
 def execute_git_maintenance(decision: Any, *, receipt_dir: Path | None = None) -> GitMaintenanceResult | None:
+    """Hold the same exclusive file lock as vault_git_sync during all Git work."""
+    drive = getattr(decision, "top_drive", None)
+    if not drive or not str(getattr(drive, "name", "")).endswith("_git"):
+        return None
+    context = getattr(drive, "source_data", {}).get("git")
+    if not isinstance(context, dict) or not context.get("repo_path"):
+        return _execute_git_maintenance_locked(decision, receipt_dir=receipt_dir)
+    repo_path = str(context["repo_path"])
+    git_dir = _git(repo_path, ["rev-parse", "--absolute-git-dir"]).strip()
+    if not git_dir:
+        return _execute_git_maintenance_locked(decision, receipt_dir=receipt_dir)
+    lock = Path(git_dir) / "vault-sync.lock"
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except OSError:
+        return _write_receipt(GitMaintenanceResult(
+            outcome="blocked", repo_name=context.get("repo_name"), repo_path=repo_path,
+            resolves_drive=False, before_head=None, commit_hash=None,
+            committed_files=[], remaining_files=[],
+            summary="Git exchange lock unavailable; Pulse left repository untouched",
+        ), receipt_dir or DEFAULT_RECEIPT_DIR)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump({"pid": os.getpid(), "created": time.time(), "owner": "pulse-autocommit"}, stream)
+        result = _execute_git_maintenance_locked(decision, receipt_dir=receipt_dir)
+    finally:
+        lock.unlink()
+    if result and result.commit_hash and result.outcome in ("committed", "committed_partial"):
+        from pulse.src.core.vault_sync import finish_after_commit
+        exchange = finish_after_commit(repo_path)
+        if exchange is not None:
+            code, status = exchange
+            result = replace(result, exchange_status=status,
+                             needs_attention=code != 0 or bool(result.remaining_files),
+                             resolves_drive=result.resolves_drive and code == 0,
+                             summary=result.summary + f"; private vault exchange: {status}")
+            # Amend the same result receipt consumed by the existing Git drive.
+            receipt = Path(result.receipt_path)
+            candidate = receipt.with_suffix(".tmp")
+            candidate.write_text(json.dumps(result.as_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+            candidate.replace(receipt)
+    return result
+
+
+def _execute_git_maintenance_locked(decision: Any, *, receipt_dir: Path | None = None) -> GitMaintenanceResult | None:
     action = analyze_git_drive(decision)
     if action is None:
         return None

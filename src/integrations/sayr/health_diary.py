@@ -222,8 +222,11 @@ class SayrHealthDiaryIntegration(_DefaultIntegration):
                 result = GitMaintenanceResult.from_dict(result_data)
                 return "\n".join([
                     f"{config.openclaw.message_prefix} Deterministic Git maintenance has already finished.",
-                    "Tell Lisa this result in one concise visible message.",
-                    "Do not run tools, modify Git, or spawn a subagent.",
+                    "This is a work item for the persistent Settings conversation, not a relay notice.",
+                    "Use the current conversation context and read-only tools when needed to interpret the result.",
+                    "If Lisa already authorized the safe continuation in this conversation, finish it and report the outcome.",
+                    "Otherwise ask one precise question only after identifying the real decision; never merely repeat that automation failed.",
+                    "Do not expose note contents, secrets, or raw diffs. Do not invent authority for Git mutations.",
                     "",
                     result.as_message(),
                 ])

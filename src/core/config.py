@@ -24,6 +24,10 @@ class OpenClawConfig:
     deliver: bool = True
     # Explicit sessionKey for main mode
     session_key: Optional[str] = None
+    # Optional dedicated persistent route for deterministic Git results.
+    git_session_key: Optional[str] = None
+    git_channel: Optional[str] = None
+    git_to: Optional[str] = None
     # Model override for isolated sessions (None = use default)
     isolated_model: Optional[str] = None
 
@@ -357,6 +361,11 @@ class PulseConfig:
                 session_mode=oc.get("session_mode", config.openclaw.session_mode),
                 deliver=oc.get("deliver", config.openclaw.deliver),
                 session_key=oc.get("session_key", config.openclaw.session_key),
+                git_session_key=oc.get(
+                    "git_session_key", config.openclaw.git_session_key
+                ),
+                git_channel=oc.get("git_channel", config.openclaw.git_channel),
+                git_to=oc.get("git_to", config.openclaw.git_to),
                 isolated_model=oc.get("isolated_model", config.openclaw.isolated_model),
             )
 
@@ -742,6 +751,15 @@ class PulseConfig:
         ):
             errors.append(
                 "openclaw.session_key is required when session_mode is main or persistent"
+            )
+        git_route = (
+            self.openclaw.git_session_key,
+            self.openclaw.git_channel,
+            self.openclaw.git_to,
+        )
+        if any(git_route) and not all(git_route):
+            errors.append(
+                "openclaw.git_session_key, git_channel, and git_to must be set together"
             )
         if self.evaluator.mode not in ("rules", "model"):
             errors.append(

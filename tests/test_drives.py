@@ -314,6 +314,41 @@ class TestEveningCultureDrive:
         assert drive.pressure > 0.0
         assert drive.source_data["evening_culture"]["current_topic"] == "Прометей"
 
+    def test_discussed_at_terminal_topic_rotates_on_next_evening_window(
+        self,
+        tmp_path,
+    ):
+        engine = self._make_engine()
+        topics_path = tmp_path / "evening-culture-topics.md"
+        current_path = tmp_path / "evening-culture-current.json"
+        topics_path.write_text(
+            "# Evening culture topics\n\n"
+            "## Уже были\n\n"
+            "- Пылесос-робот и невидимый маяк — обсуждали 2026-09-02\n\n"
+            "## Кандидаты\n\n"
+            "- Басё и маленькая форма: воздух и пауза\n",
+            encoding="utf-8",
+        )
+        current_path.write_text(
+            '{"id":"robot-vacuum","title":"Пылесос-робот и невидимый маяк",'
+            '"status":"discussed","discussed_at":"2026-09-02T23:49:37+03:00"}',
+            encoding="utf-8",
+        )
+        engine.EVENING_CULTURE_TOPICS_PATH = topics_path
+        engine.EVENING_CULTURE_CURRENT_PATH = current_path
+
+        engine._refresh_evening_culture_drive(
+            dt=60.0,
+            now_dt=datetime(2026, 9, 3, 16, 30),
+        )
+
+        drive = engine.drives[DriveEngine.EVENING_CULTURE_DRIVE]
+        data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
+        assert data["title"] == "Басё и маленькая форма"
+        assert data["status"] == "selected"
+        assert drive.pressure > 0.0
+        assert drive.source_data["evening_culture"]["current_topic"] == "Басё и маленькая форма"
+
     def test_evening_culture_reports_no_fresh_candidates_after_archiving_terminal(
         self,
         tmp_path,

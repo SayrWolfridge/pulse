@@ -10,6 +10,7 @@ from pulse.src.core.config import PulseConfig
 from pulse.src.core.daemon import PulseDaemon
 from pulse.src.core.webhook import (
     OpenClawWebhook,
+    PersistentWebhookRoute,
     _redact_payload_for_log,
     _ssl_for_url,
 )
@@ -98,14 +99,15 @@ def test_redacts_result_callback_token_without_changing_transport_payload():
 def test_main_mode_uses_current_persistent_hook_contract():
     config = PulseConfig()
     config.openclaw.session_mode = "main"
-    config.openclaw.session_key = "agent:main:telegram:default:direct:312058326"
+    config.openclaw.session_key = "agent:main:telegram:default:direct:987654321"
+    config.openclaw.to = "987654321"
 
     payload = OpenClawWebhook(config)._build_payload("hello", "Pulse")
 
     assert payload["sessionMode"] == "persistent"
     assert payload["sessionKey"] == config.openclaw.session_key
     assert payload["channel"] == "telegram"
-    assert payload["to"] == "312058326"
+    assert payload["to"] == "987654321"
     assert "isolated" not in payload
 
 
@@ -120,6 +122,61 @@ def test_isolated_mode_uses_current_isolated_hook_contract():
     assert payload["model"] == "test/model"
     assert "sessionKey" not in payload
     assert "isolated" not in payload
+
+
+def test_dedicated_git_route_overrides_only_this_payload():
+    config = PulseConfig()
+    config.openclaw.session_mode = "main"
+    config.openclaw.session_key = "agent:main:telegram:default:direct:987654321"
+    config.openclaw.to = "987654321"
+    route = PersistentWebhookRoute(
+        session_key="agent:main:telegram:group:-1001234567890:topic:766",
+        channel="telegram",
+        to="-1001234567890:topic:766",
+    )
+    hook = OpenClawWebhook(config)
+
+    git_payload = hook._build_payload("git", "Pulse Git", route=route)
+    ordinary_payload = hook._build_payload("ordinary", "Pulse")
+
+    assert git_payload["sessionKey"] == route.session_key
+    assert git_payload["to"] == route.to
+    assert git_payload["sessionMode"] == "persistent"
+    assert ordinary_payload["sessionKey"] == config.openclaw.session_key
+    assert ordinary_payload["to"] == "987654321"
+
+
+def test_git_route_config_is_all_or_nothing():
+    with pytest.raises(ValueError, match="git_session_key, git_channel, and git_to"):
+        PulseConfig._from_dict(
+            {
+                "openclaw": {
+                    "git_session_key": "agent:main:telegram:group:-1001234567890:topic:766"
+                }
+            }
+        )
+
+
+def test_daemon_routes_only_git_decisions_to_dedicated_route():
+    config = PulseConfig()
+    config.openclaw.git_session_key = (
+        "agent:main:telegram:group:-1001234567890:topic:766"
+    )
+    config.openclaw.git_channel = "telegram"
+    config.openclaw.git_to = "-1001234567890:topic:766"
+    daemon = PulseDaemon.__new__(PulseDaemon)
+    daemon.config = config
+    daemon.git_webhook_route = daemon._configured_git_webhook_route()
+
+    git_decision = SimpleNamespace(
+        top_drive=SimpleNamespace(name="obsidian_git")
+    )
+    health_decision = SimpleNamespace(
+        top_drive=SimpleNamespace(name="health_food")
+    )
+
+    assert daemon._route_for_decision(git_decision) is daemon.git_webhook_route
+    assert daemon._route_for_decision(health_decision) is None
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,7 @@ from pulse.src.conversation_lifecycle import (
     growth_id_from_callback_kind,
     mark_growth_terminal_result,
 )
+from pulse.src.core.vault_sync import alert_id_from_callback_kind
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -231,6 +232,24 @@ class HealthServer:
                 result.get("status") or result.get("reason"),
             )
             return web.json_response({"ok": True, "conversation": result})
+
+        vault_sync_alert_id = alert_id_from_callback_kind(kind)
+        if vault_sync_alert_id:
+            text = data.get("outputText") or data.get("summary") or ""
+            if not isinstance(text, str):
+                text = ""
+            result = self.daemon.vault_sync.mark_alert_terminal(
+                vault_sync_alert_id, status, text
+            )
+            if status == "ok" and not text.strip():
+                return web.json_response({"error": "missing outputText"}, status=400)
+            logger.info(
+                "OpenClaw vault-sync alert result: alert=%s runId=%s result=%s",
+                vault_sync_alert_id,
+                run_id,
+                result.get("status"),
+            )
+            return web.json_response({"ok": True, "vault_sync_alert": result})
 
         if kind != "pulse.emotions.write_diary_note":
             return web.json_response({"ok": True, "ignored": "unsupported kind"})
