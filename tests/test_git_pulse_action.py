@@ -93,9 +93,47 @@ def test_executor_commits_only_safe_workspace_additions(tmp_path):
     assert result.outcome == "committed_partial"
     assert result.resolves_drive is False
     assert result.committed_files == ["memory/2026-08-30.md"]
-    assert set(result.remaining_files) == {"tracked.txt", "memory/empty.md", "other.md"}
+    assert set(result.remaining_files) == {"tracked.txt", "other.md"}
+    assert result.deleted_files == ["memory/empty.md"]
+    assert "- deleted_empty_files:\n  - memory/empty.md" in result.as_message()
     assert _git(repo, "show", "--format=", "--name-only", "HEAD").stdout.strip() == "memory/2026-08-30.md"
     assert Path(result.receipt_path).exists()
+
+
+def test_executor_commits_modified_workspace_dreams_file(tmp_path):
+    repo = _repo(tmp_path)
+    (repo / "DREAMS.md").write_text("before\n", encoding="utf-8")
+    _git(repo, "add", "DREAMS.md")
+    _git(repo, "commit", "-m", "add dreams")
+    (repo / "DREAMS.md").write_text("after\n", encoding="utf-8")
+
+    result = execute_git_maintenance(_decision(str(repo)), receipt_dir=tmp_path / "receipts")
+
+    assert result is not None
+    assert result.outcome == "committed"
+    assert result.committed_files == ["DREAMS.md"]
+    assert _git(repo, "show", "HEAD:DREAMS.md").stdout == "after\n"
+
+
+def test_executor_deletes_only_direct_untracked_empty_memory_markdown(tmp_path):
+    repo = _repo(tmp_path)
+    memory = repo / "memory"
+    (memory / "nested").mkdir(parents=True)
+    (memory / "empty.md").write_text("", encoding="utf-8")
+    (memory / "nested" / "empty.md").write_text("", encoding="utf-8")
+    (memory / "empty.txt").write_text("", encoding="utf-8")
+    (memory / "link.md").symlink_to("missing-target.md")
+    (memory / "note.md").write_text("note\n", encoding="utf-8")
+
+    result = execute_git_maintenance(_decision(str(repo)), receipt_dir=tmp_path / "receipts")
+
+    assert result is not None
+    assert result.deleted_files == ["memory/empty.md"]
+    assert not (memory / "empty.md").exists()
+    assert (memory / "nested" / "empty.md").exists()
+    assert (memory / "empty.txt").exists()
+    assert (memory / "link.md").is_symlink()
+    assert result.committed_files == ["memory/note.md"]
 
 
 def test_executor_commits_obsidian_markdown_and_resolves_clean_repo(tmp_path):
@@ -111,6 +149,65 @@ def test_executor_commits_obsidian_markdown_and_resolves_clean_repo(tmp_path):
     assert result.outcome == "committed"
     assert result.resolves_drive is True
     assert result.committed_files == ["Дневник/мысль.md"]
+    assert _git(repo, "status", "--short").stdout == ""
+
+
+def test_executor_leaves_obsidian_authorized_review_files_for_sayr(tmp_path):
+    repo = _repo(tmp_path)
+    (repo / "health_diary").mkdir()
+    (repo / "lair" / "recipes").mkdir(parents=True)
+    (repo / "health_diary" / "2026-09-20.md").write_text("private\n", encoding="utf-8")
+    (repo / "lair" / "recipes" / "bread-cooked-together.md").write_text("private\n", encoding="utf-8")
+    (repo / "unknown.md").write_text("unknown\n", encoding="utf-8")
+
+    result = execute_git_maintenance(_decision(str(repo), "obsidian"), receipt_dir=tmp_path / "receipts")
+
+    assert result is not None
+    assert result.outcome == "committed_partial"
+    assert result.committed_files == ["unknown.md"]
+    assert set(result.authorized_review_files) == {
+        "health_diary/2026-09-20.md", "lair/recipes/bread-cooked-together.md",
+    }
+    assert result.remaining_files == [
+        "health_diary/2026-09-20.md", "lair/recipes/bread-cooked-together.md",
+    ]
+    message = result.as_message()
+    assert "authorized_files_for_sayr_review:" in message
+    assert "inspect_authorized_files_semantically" in message
+    assert "remaining_files_requiring_lisa_decision:" not in message
+
+
+def test_executor_omits_lisa_decision_section_for_only_authorized_obsidian_files(tmp_path):
+    repo = _repo(tmp_path)
+    (repo / "health_diary").mkdir()
+    (repo / "health_diary" / "2026-09-20.md").write_text("private\n", encoding="utf-8")
+
+    result = execute_git_maintenance(_decision(str(repo), "obsidian"), receipt_dir=tmp_path / "receipts")
+
+    assert result is not None
+    assert result.outcome == "no_safe_slice"
+    assert result.remaining_files == ["health_diary/2026-09-20.md"]
+    message = result.as_message()
+    assert "authorized_files_for_sayr_review:" in message
+    assert "remaining_files_requiring_lisa_decision:" not in message
+
+
+def test_executor_deletes_only_empty_memory_files_and_resolves_clean_repo(tmp_path):
+    repo = _repo(tmp_path)
+    memory = repo / "memory"
+    memory.mkdir()
+    (memory / "empty-one.md").write_text("", encoding="utf-8")
+    (memory / "empty-two.md").write_text("", encoding="utf-8")
+
+    result = execute_git_maintenance(_decision(str(repo)), receipt_dir=tmp_path / "receipts")
+
+    assert result is not None
+    assert result.outcome == "cleaned"
+    assert result.resolves_drive is True
+    assert result.committed_files == []
+    assert result.deleted_files == ["memory/empty-one.md", "memory/empty-two.md"]
+    assert result.remaining_files == []
+    assert "deleted_empty_files:" in result.as_message()
     assert _git(repo, "status", "--short").stdout == ""
 
 

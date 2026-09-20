@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 import time
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -66,15 +66,26 @@ class GitMaintenanceResult:
     receipt_path: str | None = None
     exchange_status: str | None = None
     needs_attention: bool = False
+    deleted_files: list[str] = field(default_factory=list)
+    authorized_review_files: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GitMaintenanceResult":
-        return cls(**{key: data[key] for key in cls.__dataclass_fields__ if key in data})
+        values = {key: data[key] for key in cls.__dataclass_fields__ if key in data}
+        values.setdefault("deleted_files", [])
+        values.setdefault("authorized_review_files", [])
+        return cls(**values)
 
     def as_message(self) -> str:
+        deleted_files = self.deleted_files or []
+        authorized_review_files = self.authorized_review_files or []
+        lisa_decision_files = [
+            path for path in self.remaining_files
+            if path not in authorized_review_files
+        ]
         lines = [
             "GIT RESULT",
             "- execution: deterministic_no_model",
@@ -91,14 +102,27 @@ class GitMaintenanceResult:
         if self.committed_files:
             lines.append("- committed_files:")
             lines.extend(f"  - {path}" for path in self.committed_files)
-        if self.remaining_files:
-            lines.append("- remaining_files_requiring_review:")
-            lines.extend(f"  - {path}" for path in self.remaining_files)
-        lines.append(
-            "- required_action_by_sayr: analyze_in_settings_context; "
-            "use_read_only_tools_if_needed; continue_only_work_already_authorized; "
-            "ask_lisa_only_for_a_real_decision"
-        )
+        if deleted_files:
+            lines.append("- deleted_empty_files:")
+            lines.extend(f"  - {path}" for path in deleted_files)
+        if authorized_review_files:
+            lines.append("- authorized_files_for_sayr_review:")
+            lines.extend(f"  - {path}" for path in authorized_review_files)
+        if lisa_decision_files:
+            lines.append("- remaining_files_requiring_lisa_decision:")
+            lines.extend(f"  - {path}" for path in lisa_decision_files)
+        if authorized_review_files:
+            lines.append(
+                "- required_action_by_sayr: inspect_authorized_files_semantically; "
+                "fix_only_evident_technical_inconsistencies; commit_reviewed_files; "
+                "sync_private_vault; ask_lisa_only_if_a_genuine_content_decision_is_ambiguous"
+            )
+        else:
+            lines.append(
+                "- required_action_by_sayr: analyze_in_settings_context; "
+                "use_read_only_tools_if_needed; continue_only_work_already_authorized; "
+                "ask_lisa_only_for_a_real_decision"
+            )
         return "\n".join(lines)
 
 
@@ -216,7 +240,9 @@ def _is_safe_addition(repo_name: str | None, repo_path: Path, relative_path: str
         return False
     if any(part.startswith(".") for part in posix.parts):
         return False
-    if repo_name == "workspace":
+    if repo_name == "workspace" and posix == PurePosixPath("DREAMS.md"):
+        pass
+    elif repo_name == "workspace":
         allowed = (
             posix.parent == PurePosixPath("memory")
             or PurePosixPath("memory/dreaming") in posix.parents
@@ -225,6 +251,8 @@ def _is_safe_addition(repo_name: str | None, repo_path: Path, relative_path: str
         if not allowed:
             return False
     elif repo_name != "obsidian":
+        return False
+    if repo_name == "obsidian" and _is_authorized_review_file(posix):
         return False
     full_path = repo_path.joinpath(*posix.parts)
     try:
@@ -241,6 +269,21 @@ def _is_safe_addition(repo_name: str | None, repo_path: Path, relative_path: str
         # meaningful and must not create a question or a silent rewrite.
         with full_path.open("rb") as stream:
             return b"\0" not in stream.read(8192)
+    except OSError:
+        return False
+
+
+def _is_authorized_review_file(path: PurePosixPath) -> bool:
+    return path.match("health_diary/*.md") or path.match("lair/recipes/*-cooked-together.md")
+
+
+def _is_empty_memory_file(repo_path: Path, relative_path: str) -> bool:
+    posix = PurePosixPath(relative_path.replace("\\", "/"))
+    if posix.parent != PurePosixPath("memory") or posix.suffix.lower() != ".md":
+        return False
+    full_path = repo_path.joinpath(*posix.parts)
+    try:
+        return not full_path.is_symlink() and full_path.is_file() and full_path.stat().st_size == 0
     except OSError:
         return False
 
@@ -405,6 +448,8 @@ def _execute_git_maintenance_locked(decision: Any, *, receipt_dir: Path | None =
             commit_hash=kwargs.pop("commit_hash", None),
             committed_files=kwargs.pop("committed_files", []),
             remaining_files=kwargs.pop("remaining_files", action.dirty_files),
+            deleted_files=kwargs.pop("deleted_files", []),
+            authorized_review_files=kwargs.pop("authorized_review_files", []),
             receipt_path=None,
             **kwargs,
         ), receipts)
@@ -424,17 +469,47 @@ def _execute_git_maintenance_locked(decision: Any, *, receipt_dir: Path | None =
             remaining_files=[path for _, path in entries],
             summary="Repository already has staged changes; Pulse left the index untouched",
         )
+    deleted_candidates = sorted(
+        path for status, path in entries
+        if status == "??" and _is_empty_memory_file(repo_path, path)
+    )
+    deleted_files: list[str] = []
+    for path in deleted_candidates:
+        try:
+            repo_path.joinpath(*PurePosixPath(path.replace("\\", "/")).parts).unlink()
+            deleted_files.append(path)
+        except OSError:
+            pass
+    if deleted_files:
+        entries = _status_entries(str(repo_path))
+    status_by_path = {path: status for status, path in entries}
+    authorized_review_files = sorted(
+        path for path, status in status_by_path.items()
+        if action.repo_name == "obsidian"
+        and (status == "??" or status[1] != " ")
+        and _is_authorized_review_file(PurePosixPath(path.replace("\\", "/")))
+    )
     eligible = sorted(
         path for status, path in entries
-        if status == "??" and _is_safe_addition(action.repo_name, repo_path, path)
+        if (status == "??" or (status == " M" and action.repo_name == "workspace"
+                                and path == "DREAMS.md"))
+        and _is_safe_addition(action.repo_name, repo_path, path)
     )
     if not eligible:
+        if deleted_files and not entries:
+            return finish(
+                outcome="cleaned", resolves_drive=True,
+                remaining_files=[], deleted_files=deleted_files,
+                authorized_review_files=authorized_review_files,
+                summary="Deterministic safe note cleanup completed; repository is clean",
+            )
         return finish(
             outcome="no_safe_slice", resolves_drive=False,
             remaining_files=[path for _, path in entries],
-            summary="No non-empty additive Markdown notes matched the safe allowlist",
+            deleted_files=deleted_files,
+            authorized_review_files=authorized_review_files,
+            summary="No deterministic Markdown slice matched the safe allowlist",
         )
-    status_by_path = {path: status for status, path in entries}
     companions: list[str] = []
     if status_by_path.get(TOPIC_MAP_PATH) == " M":
         companion = _safe_topic_map_companion(action.repo_name, repo_path, eligible)
@@ -464,7 +539,7 @@ def _execute_git_maintenance_locked(decision: Any, *, receipt_dir: Path | None =
     )
     staged_states = {path: status for status, path in after_add if path in stage_paths}
     expected_states = {
-        **{path: "A " for path in eligible},
+        **{path: ("M " if status_by_path.get(path) == " M" else "A ") for path in eligible},
         **{path: "M " for path in companions},
     }
     safe_index = staged_now == stage_paths and staged_states == expected_states
@@ -507,6 +582,8 @@ def _execute_git_maintenance_locked(decision: Any, *, receipt_dir: Path | None =
         commit_hash=commit_hash,
         committed_files=stage_paths,
         remaining_files=remaining,
-        summary=("Safe additive notes committed; repository is clean" if not remaining
-                 else "Safe additive notes committed; disallowed changes remain for review"),
+        deleted_files=deleted_files,
+        authorized_review_files=authorized_review_files,
+        summary=("Deterministic safe notes committed; repository is clean" if not remaining
+                 else "Deterministic safe notes committed; disallowed changes remain for review"),
     )
