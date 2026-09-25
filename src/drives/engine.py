@@ -13,8 +13,10 @@ This is the synthetic equivalent of "wanting to do something."
 
 import json
 import logging
+import os
 import re
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, time as datetime_time, timedelta
@@ -958,6 +960,30 @@ class DriveEngine:
         except OSError:
             return None
 
+    def _write_evening_culture_topics_text(self, text: str) -> None:
+        """Atomically replace the durable evening-culture topic shelf."""
+        path = self.EVENING_CULTURE_TOPICS_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+                temporary = Path(handle.name)
+            os.replace(temporary, path)
+        finally:
+            if temporary is not None and temporary.exists():
+                temporary.unlink()
+        self._source_cache.pop(str(path), None)
+
     def _count_fresh_evening_culture_candidates(self) -> int:
         """Count curated evening-culture topics that have not been discussed."""
         text = self._read_evening_culture_topics_text()
@@ -1116,6 +1142,11 @@ class DriveEngine:
         )
         if not evening_window or anchor.date() >= now_dt.date():
             return False
+        if not self._move_evening_culture_topic_to_history(
+            current,
+            discussion_date=anchor.date().isoformat(),
+        ):
+            return False
         current["previous_terminal_status"] = current.get("status")
         current["status"] = "archived"
         current["archived_at"] = now_dt.isoformat(timespec="seconds")
@@ -1124,6 +1155,91 @@ class DriveEngine:
             "evening window"
         )
         self._write_evening_culture_current(current)
+        return True
+
+    def _move_evening_culture_topic_to_history(
+        self,
+        current: dict,
+        *,
+        discussion_date: str,
+    ) -> bool:
+        """Move a terminal current topic from candidates to durable history.
+
+        The shelf is persisted before the current card is archived. A failed
+        shelf write therefore leaves the terminal current in place and blocks
+        rotation instead of allowing the same candidate to be selected again.
+        """
+        title = str(current.get("title") or "").strip()
+        target = self._normalize_evening_culture_title(title)
+        text = self._read_evening_culture_topics_text()
+        if not target or text is None:
+            return False
+
+        lines = text.splitlines()
+        headings = {
+            line.strip(): index
+            for index, line in enumerate(lines)
+            if line.strip().startswith("## ")
+        }
+        if "## Уже были" not in headings or "## Кандидаты" not in headings:
+            return False
+
+        candidate_start = headings["## Кандидаты"] + 1
+        candidate_end = next(
+            (
+                index
+                for index in range(candidate_start, len(lines))
+                if lines[index].strip().startswith("## ")
+            ),
+            len(lines),
+        )
+        candidate_index = None
+        candidate_body = title
+        for index in range(candidate_start, candidate_end):
+            line = lines[index].strip()
+            if not line.startswith("- "):
+                continue
+            body = line[2:].strip()
+            if self._normalize_evening_culture_title(body) == target:
+                candidate_index = index
+                candidate_body = body
+                break
+
+        already_seen = self._is_evening_culture_seen_title(
+            title,
+            self._extract_evening_culture_seen_titles(text),
+        )
+        if candidate_index is None and already_seen:
+            return True
+        if candidate_index is not None:
+            lines.pop(candidate_index)
+
+        if not already_seen:
+            seen_start = next(
+                index for index, line in enumerate(lines) if line.strip() == "## Уже были"
+            ) + 1
+            seen_end = next(
+                (
+                    index
+                    for index in range(seen_start, len(lines))
+                    if lines[index].strip().startswith("## ")
+                ),
+                len(lines),
+            )
+            insert_at = seen_end
+            while insert_at > seen_start and not lines[insert_at - 1].strip():
+                insert_at -= 1
+            lines.insert(
+                insert_at,
+                f"- {candidate_body} — обсуждали {discussion_date}; тема закрыта, "
+                "не предлагать снова без явного желания Лисы",
+            )
+
+        try:
+            self._write_evening_culture_topics_text("\n".join(lines) + "\n")
+        except OSError as exc:
+            logger.warning("Evening-culture shelf archival failed: %s", exc)
+            return False
         return True
 
     def _is_evening_culture_stale_discussing(self, current: Optional[dict], *, now_dt: datetime) -> bool:

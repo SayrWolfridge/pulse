@@ -313,6 +313,90 @@ class TestEveningCultureDrive:
         assert data["status"] == "selected"
         assert drive.pressure > 0.0
         assert drive.source_data["evening_culture"]["current_topic"] == "Прометей"
+        topics = topics_path.read_text(encoding="utf-8")
+        assert "- Антигона: долг" not in topics
+        assert topics.count("- Антигона — обсуждали") == 1
+
+    def test_terminal_topic_moves_from_candidates_to_history_before_rotation(
+        self,
+        tmp_path,
+    ):
+        engine = self._make_engine()
+        topics_path = tmp_path / "evening-culture-topics.md"
+        current_path = tmp_path / "evening-culture-current.json"
+        topics_path.write_text(
+            "# Evening culture topics\n\n"
+            "## Уже были\n\n"
+            "- Антигона — обсуждали 2026-06-07\n\n"
+            "## Кандидаты\n\n"
+            "- Врубель и мерцающая граница образа: демон, ангел, болезнь, красота\n"
+            "- Маленький принц: забота без владения\n",
+            encoding="utf-8",
+        )
+        current_path.write_text(
+            '{"id":"vrubel","title":"Врубель и мерцающая граница образа",'
+            '"status":"discussed","discussed_at":"2026-09-24T17:02:00+03:00"}',
+            encoding="utf-8",
+        )
+        engine.EVENING_CULTURE_TOPICS_PATH = topics_path
+        engine.EVENING_CULTURE_CURRENT_PATH = current_path
+
+        engine._refresh_evening_culture_drive(
+            dt=60.0,
+            now_dt=datetime(2026, 9, 25, 16, 30),
+        )
+
+        data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
+        assert data["title"] == "Маленький принц"
+        assert data["status"] == "selected"
+        topics = topics_path.read_text(encoding="utf-8")
+        seen, candidates = topics.split("## Кандидаты", 1)
+        assert "Врубель и мерцающая граница образа" in seen
+        assert "обсуждали 2026-09-24" in seen
+        assert "не предлагать снова без явного желания Лисы" in seen
+        assert "Врубель и мерцающая граница образа" not in candidates
+
+    def test_terminal_topic_does_not_archive_when_shelf_write_fails(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        engine = self._make_engine()
+        topics_path = tmp_path / "evening-culture-topics.md"
+        current_path = tmp_path / "evening-culture-current.json"
+        topics_path.write_text(
+            "# Evening culture topics\n\n"
+            "## Уже были\n\n"
+            "## Кандидаты\n\n"
+            "- Врубель и мерцающая граница образа: демон и ангел\n"
+            "- Маленький принц: забота без владения\n",
+            encoding="utf-8",
+        )
+        current_path.write_text(
+            '{"id":"vrubel","title":"Врубель и мерцающая граница образа",'
+            '"status":"discussed","discussed_at":"2026-09-24T17:02:00+03:00"}',
+            encoding="utf-8",
+        )
+        engine.EVENING_CULTURE_TOPICS_PATH = topics_path
+        engine.EVENING_CULTURE_CURRENT_PATH = current_path
+
+        def fail_write(_text):
+            raise OSError("read-only shelf")
+
+        monkeypatch.setattr(engine, "_write_evening_culture_topics_text", fail_write)
+
+        engine._refresh_evening_culture_drive(
+            dt=60.0,
+            now_dt=datetime(2026, 9, 25, 16, 30),
+        )
+
+        data = __import__("json").loads(current_path.read_text(encoding="utf-8"))
+        assert data["title"] == "Врубель и мерцающая граница образа"
+        assert data["status"] == "discussed"
+        assert "Врубель и мерцающая граница образа" in topics_path.read_text(encoding="utf-8")
+        drive = engine.drives[DriveEngine.EVENING_CULTURE_DRIVE]
+        assert drive.pressure == 0.0
+        assert "evening_culture" not in drive.source_data
 
     def test_discussed_at_terminal_topic_rotates_on_next_evening_window(
         self,
