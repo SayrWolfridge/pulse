@@ -1181,6 +1181,7 @@ class TestHealthStateBridgeRefresh:
         rules_path.parent.mkdir(parents=True, exist_ok=True)
         rules_path.write_text('{"enabled":true,"rules":[]}', encoding="utf-8")
         state_path = tmp_path / "pulse" / "self" / "health-state.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
         state_path.write_text('{"date":"2026-06-10","accepted_entries_today":0}', encoding="utf-8")
 
         engine._refresh_health_rules()
